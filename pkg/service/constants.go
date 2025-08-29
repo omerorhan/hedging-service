@@ -1,0 +1,15 @@
+package service
+
+const CheckIn = "CheckIn"
+const CheckInAndNonRefundable = "CheckInAndNonRefundable"
+const CheckOut = "CheckOut"
+const CheckOutAndNonRefundable = "CheckOutAndNonRefundable"
+const CreationDate = "CreationDate"
+const CancellationDeadline = "CancellationDeadline"
+const CancellationDeadlineAndNonRefundable = "CancellationDeadlineAndNonRefundable"
+const Default = "Default"
+const Monthly = "Monthly"
+const Weekly = "Weekly"
+const BiWeekly = "BiWeekly"
+const Daily = "Daily"
+const SpecificDaysOfWeek = "SpecificDaysOfWeek"
