@@ -15,14 +15,6 @@ import (
 	"github.com/omerorhan/hedging-service/internal/storage"
 )
 
-// Data structures from your source code for API responses
-// Use types from storage package for consistency
-type RatesEnvelope = storage.RatesEnvelope
-type PaymentTermsEnvelope = storage.PaymentTermsEnvelope
-type CurrencyCollection = storage.CurrencyCollection
-type HedgedPair = storage.HedgedPair
-type SpotPair = storage.SpotPair
-
 type AgencyPaymentTerm struct {
 	AgencyId              int `json:"agencyId"`
 	BaseForPaymentDueDate int `json:"baseForPaymentDueDate"`

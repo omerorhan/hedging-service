@@ -27,8 +27,9 @@ func (c *Client) Initialize() error {
 	return c.service.Initialize()
 }
 
-// GiveMeRate is an alias for GetRate for backward compatibility
+// GiveMeRate calculates and returns the hedging rate for a given request
 func (c *Client) GiveMeRate(req GiveMeRateReq) (*GiveMeRateResp, error) {
+	// Both request and response types are aliased, so no conversion needed
 	return c.service.GiveMeRate(req)
 }
 
@@ -51,10 +52,14 @@ var (
 	WithLogging              = service.WithLogging
 )
 
-// Re-export common types for convenience
+// GiveMeRateReq is the clean API request type (alias to internal type)
+type GiveMeRateReq = storage.GiveMeRateReq
+
+// GiveMeRateResp is the clean API response type (alias to internal type)
+type GiveMeRateResp = storage.GiveMeRateResp
+
+// Advanced types (for advanced users who need internal types)
 type (
-	GiveMeRateReq  = service.GiveMeRateReq
-	GiveMeRateResp = service.GiveMeRateResp
 	RatesEnvelope  = storage.RatesEnvelope
 	TermsCacheData = storage.TermsCacheData
 )
