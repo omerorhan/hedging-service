@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/omerorhan/hedging-service/pkg/cache"
+	"github.com/omerorhan/hedging-service/internal/storage"
 )
 
-func chooseBaseDate(req cache.HedgeCalcReq, bpddCode int, bpddName string) (time.Time, string, error) {
+func chooseBaseDate(req storage.HedgeCalcReq, bpddCode int, bpddName string) (time.Time, string, error) {
 	switch bpddName {
 	case CheckIn:
 		if req.CheckIn == "" {
@@ -152,9 +152,9 @@ func daysDueFromFrequency(base time.Time, freqCode int, freqName string, daysAft
 	}
 }
 
-func selectTenor(tenors []cache.Tenor, days int) (*cache.Tenor, error) {
+func selectTenor(tenors []storage.Tenor, days int) (*storage.Tenor, error) {
 	if len(tenors) == 0 {
-		return &cache.Tenor{}, errors.New("no tenors")
+		return &storage.Tenor{}, errors.New("no tenors")
 	}
 	choice := tenors[len(tenors)-1]
 	for _, t := range tenors {

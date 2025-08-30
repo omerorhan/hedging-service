@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/omerorhan/hedging-service/pkg/cache"
+	"github.com/omerorhan/hedging-service/internal/storage"
 )
 
 func mustParseISODate(dateStr string) time.Time {
@@ -60,6 +60,6 @@ func endOfMonth(t time.Time) time.Time {
 
 func daysBetween(a, b time.Time) int { return int(math.Round(b.Sub(a).Hours() / 24)) }
 
-func getPairKey(from, to string) cache.PairKey {
-	return cache.PairKey(strings.ToUpper(from) + "->" + strings.ToUpper(to))
+func getPairKey(from, to string) storage.PairKey {
+	return storage.PairKey(strings.ToUpper(from) + "->" + strings.ToUpper(to))
 }

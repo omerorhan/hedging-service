@@ -12,15 +12,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/omerorhan/hedging-service/pkg/cache"
+	"github.com/omerorhan/hedging-service/internal/storage"
 )
 
 // Data structures from your source code for API responses
-// Use types from cache package for consistency
-type RatesEnvelope = cache.RatesEnvelope
-type CurrencyCollection = cache.CurrencyCollection
-type HedgedPair = cache.HedgedPair
-type SpotPair = cache.SpotPair
+// Use types from storage package for consistency
+type RatesEnvelope = storage.RatesEnvelope
+type CurrencyCollection = storage.CurrencyCollection
+type HedgedPair = storage.HedgedPair
+type SpotPair = storage.SpotPair
 
 type PaymentTermsEnvelope struct {
 	AgencyPaymentTerms       []AgencyPaymentTerm `json:"agencyPaymentTerms"`
@@ -54,8 +54,8 @@ func parseBasicAuthPair(auth string) (username, password string, ok bool) {
 
 // HedgingService is a self-managing service that automatically handles caching and data updates
 type HedgingService struct {
-	redisCache  cache.Cache
-	memCache    *cache.MemoryCache
+	redisCache  storage.Cache
+	memCache    *storage.MemoryCache
 	opts        *ServiceOptions
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -98,7 +98,7 @@ func NewHedgingService(options ...ServiceOption) (*HedgingService, error) {
 	}
 
 	// Create Redis cache
-	redisCache, err := cache.NewRedisCache(
+	redisCache, err := storage.NewRedisCache(
 		opts.RedisAddr,
 	)
 	if err != nil {
@@ -106,7 +106,7 @@ func NewHedgingService(options ...ServiceOption) (*HedgingService, error) {
 	}
 
 	// Create in-memory cache
-	memCache := cache.NewMemoryCache()
+	memCache := storage.NewMemoryCache()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	service := &HedgingService{
@@ -189,7 +189,7 @@ func (hs *HedgingService) Initialize() error {
 }
 
 func (hs *HedgingService) initializeCachesFromRedis() error {
-	hs.log("📥 Loading existing data from Redis...")
+	// hs.log("📥 Loading existing data from Redis...")
 
 	ratesFromBackup, err := hs.redisCache.GetRatesBackup()
 	ratesNeedsRefresh := true
@@ -333,7 +333,7 @@ func (hs *HedgingService) refreshPaymentTerms() {
 	hs.log("✅ Payment terms refreshed successfully")
 }
 
-func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateResp, error) {
+func (hs *HedgingService) GiveMeRate(req storage.HedgeCalcReq) (*storage.GiveMeRateResp, error) {
 	if !hs.initialized {
 		return nil, fmt.Errorf("service not initialized - call Initialize() first")
 	}
@@ -403,7 +403,7 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 
 	dueDate := req.BookingCreatedAt.Add(time.Duration(dth) * 24 * time.Hour)
 
-	resp := &cache.GiveMeRateResp{
+	resp := &storage.GiveMeRateResp{
 		From:         req.From,
 		To:           req.To,
 		Rate:         rate,
@@ -483,7 +483,7 @@ func (hs *HedgingService) fetchPaymentTerms(ctx context.Context) (*PaymentTermsE
 }
 
 // hydrateRates hydrates rates data using simplified backup approach
-func (hs *HedgingService) hydrateRates(envelope *cache.RatesEnvelope) error {
+func (hs *HedgingService) hydrateRates(envelope *storage.RatesEnvelope) error {
 	if envelope == nil || !envelope.IsSuccessful {
 		return errors.New("bad rates envelope or unsuccessful")
 	}
@@ -509,9 +509,9 @@ func (hs *HedgingService) hydrateTerms(envelope *PaymentTermsEnvelope) error {
 	if envelope == nil {
 		return errors.New("nil terms")
 	}
-	m := make(map[int]cache.AgencyPaymentTerm, len(envelope.AgencyPaymentTerms))
+	m := make(map[int]storage.AgencyPaymentTerm, len(envelope.AgencyPaymentTerms))
 	for _, t := range envelope.AgencyPaymentTerms {
-		m[t.AgencyId] = cache.AgencyPaymentTerm{
+		m[t.AgencyId] = storage.AgencyPaymentTerm{
 			AgencyId:              t.AgencyId,
 			BaseForPaymentDueDate: t.BaseForPaymentDueDate,
 			PaymentFrequency:      t.PaymentFrequency,
@@ -528,7 +528,7 @@ func (hs *HedgingService) hydrateTerms(envelope *PaymentTermsEnvelope) error {
 	}
 
 	// Store in Redis cache
-	termsData := &cache.TermsCacheData{
+	termsData := &storage.TermsCacheData{
 		ByAgency:    m,
 		BpddNames:   bpdd,
 		FreqNames:   freq,

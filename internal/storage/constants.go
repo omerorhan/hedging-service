@@ -1,4 +1,4 @@
-package cache
+package storage
 
 const (
 	Default        = "Default"

@@ -8,29 +8,29 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/omerorhan/hedging-service/pkg/cache"
-	"github.com/omerorhan/hedging-service/pkg/service"
+	"github.com/omerorhan/hedging-service/internal/storage"
+	"github.com/omerorhan/hedging-service/pkg/hedging"
 )
 
 func main() {
-	// Create service
-	hedgingService, err := service.NewHedgingService(
-		service.WithRedisConfig("tcp://localhost:6379/0", "", 0),
-		service.WithRateBaseUrl("https://api.example.com", "user:pass"),
-		service.WithPaymentTermsBaseUrl("https://api.example.com", "user:pass"),
-		service.WithRatesRefreshInterval(1*time.Hour),
-		service.WithTermsRefreshInterval(2*time.Hour),
+	// Create service using new clean API
+	client, err := hedging.NewClient(
+		hedging.WithRedisConfig("tcp://localhost:6379", "", 0),
+		hedging.WithRateBaseUrl("https://api.example.com", "user:pass"),
+		hedging.WithPaymentTermsBaseUrl("https://api.example.com", "user:pass"),
+		hedging.WithRatesRefreshInterval(1*time.Hour),
+		hedging.WithTermsRefreshInterval(2*time.Hour),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create service: %v", err)
 	}
 
 	// Initialize (loads data, starts schedulers)
-	if err := hedgingService.Initialize(); err != nil {
+	if err := client.Initialize(); err != nil {
 		log.Fatalf("Failed to initialize: %v", err)
 	}
 
-	req := cache.HedgeCalcReq{
+	req := storage.HedgeCalcReq{
 		AgencyId:             22,
 		From:                 "AED",
 		To:                   "EUR",
@@ -40,7 +40,7 @@ func main() {
 		CancellationDeadline: time.Now().UTC().Add(-11 * time.Hour * 24 * 2),
 		BookingCreatedAt:     time.Now().UTC(),
 	}
-	rate, err := hedgingService.GiveMeRate(req)
+	rate, err := client.GiveMeRate(req)
 	if err != nil {
 		log.Fatalf("error : %v", err)
 	}
@@ -54,7 +54,7 @@ func main() {
 	go func() {
 		<-sigChan
 		log.Println("Shutting down...")
-		hedgingService.Stop()
+		client.Stop()
 		os.Exit(0)
 	}()
 
