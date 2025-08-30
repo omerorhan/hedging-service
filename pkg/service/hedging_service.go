@@ -409,15 +409,15 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 		return nil, fmt.Errorf("service not initialized - call Initialize() first")
 	}
 
-	term, bpddName, freqName, err := hs.redisCache.GetPaymentTermData(req)
+	term, bpddName, freqName, err := hs.memCache.GetPaymentTermData(req)
 	if err != nil {
-		log.Printf("Payment Term could not be found through Redis: %v\n", err)
+		log.Printf("Payment Term could not be found through memCache: %v\n", err)
 
-		term, bpddName, freqName, err = hs.memCache.GetPaymentTermData(req)
-		if err != nil {
-			log.Printf("Payment Term Also could not be found through memory: %v", err)
-			return nil, err
-		}
+		// term, bpddName, freqName, err = hs.redisCache.GetPaymentTermData(req)
+		// if err != nil {
+		// 	log.Printf("Payment Term Also could not be found through Redis: %v", err)
+		// 	return nil, err
+		// }
 	}
 
 	// Base date
@@ -442,13 +442,13 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 	rateType := "spot"
 	var explain string
 	if strings.ToUpper(req.From) != strings.ToUpper(req.To) {
-		rc, ok := hs.redisCache.GetPair(pairKey)
+		rc, ok := hs.memCache.GetPair(pairKey)
 		if !ok {
-			log.Printf("Rate Pairs (from: %s-> to: %s) not be found through Redis: %v\n", req.From, req.To, err)
-			log.Printf("...checking pairs on memory...")
-			if rc, ok = hs.memCache.GetPair(pairKey); !ok {
-				return nil, fmt.Errorf("Rate Pairs (from: %s-> to: %s) also cannnot be found through Memory\n", req.From, req.To)
-			}
+			log.Printf("Rate Pairs (from: %s-> to: %s) not be found through Memcache: %v\n", req.From, req.To, err)
+			// log.Printf("...checking pairs on redis...")
+			// if rc, ok = hs.redisCache.GetPair(pairKey); !ok {
+			// 	return nil, fmt.Errorf("Rate Pairs (from: %s-> to: %s) also cannnot be found through Memory\n", req.From, req.To)
+			// }
 		}
 
 		// Select tenor
@@ -465,24 +465,25 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 		explain = fmt.Sprintf("%s => Base=%s; Lead=%dd + DaysDue(%d) => DaysToHedge=%d; tenor=%dd",
 			ddExplain, baseSrc, lead, dd, dth, ten.Days)
 	}
-	validUntil, err := hs.redisCache.GetRatesValidUntil()
-	if err != nil {
-		return nil, fmt.Errorf("rate validUntil could not be found through Redis")
-	}
+	validUntil := hs.memCache.GetRatesValidUntil()
+	// if err != nil {
+	// 	return nil, fmt.Errorf("rate validUntil could not be found through Redis")
+	// }
 
 	if validUntil.IsZero() || validUntil.Before(time.Now().UTC()) {
 		return nil, fmt.Errorf("rate validUntil has passed, it's not valid anymore")
 	}
 
-	revisionNumber, err := hs.redisCache.GetRatesRevision()
-	if err != nil {
-		log.Printf("Rate revision could not be found through Redis: %v\n", err)
-		revisionNumber = hs.memCache.GetRevision()
-
-		if revisionNumber == 0 {
-			return nil, fmt.Errorf("rate revision could not be found through memory: %v", err)
-		}
+	revisionNumber := hs.memCache.GetRevision()
+	if revisionNumber == 0 {
+		return nil, fmt.Errorf("rate revision could not be found through memory: %v", err)
 	}
+	
+	// if err != nil {
+	// 	log.Printf("Rate revision could not be found through Redis: %v\n", err)
+	// 	revisionNumber = hs.memCache.GetRevision()
+	//
+	// }
 
 	resp := &cache.GiveMeRateResp{
 		Rate:           rate,

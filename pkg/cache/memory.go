@@ -90,6 +90,12 @@ func (mc *MemoryCache) GetRevision() int {
 	return mc.rates.rev
 }
 
+func (mc *MemoryCache) GetRatesValidUntil() time.Time {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+
+	return mc.rates.validUntilUTC
+}
 func (mc *MemoryCache) SetRatesValidUntil(validUntil time.Time) error {
 	mc.mu.Lock()
 	mc.rates.validUntilUTC = validUntil
