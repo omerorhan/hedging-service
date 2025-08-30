@@ -478,18 +478,24 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 	if revisionNumber == 0 {
 		return nil, fmt.Errorf("rate revision could not be found through memory: %v", err)
 	}
-	
+
 	// if err != nil {
 	// 	log.Printf("Rate revision could not be found through Redis: %v\n", err)
 	// 	revisionNumber = hs.memCache.GetRevision()
 	//
 	// }
+	dueDate := req.BookingCreatedAt.Add(time.Duration(dth) * 24 * time.Hour)
 
 	resp := &cache.GiveMeRateResp{
-		Rate:           rate,
-		Type:           rateType,
-		RevisionNumber: revisionNumber,
-		Explain:        explain,
+		From:         req.From,
+		To:           req.To,
+		Rate:         rate,
+		IsRefundable: req.Nonrefundable,
+		RevisionId:   revisionNumber,
+		DueDate:      dueDate,
+		ValidUntil:   validUntil,
+		Type:         rateType,
+		Explain:      explain,
 	}
 	return resp, nil
 }

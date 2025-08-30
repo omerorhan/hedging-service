@@ -29,7 +29,7 @@ func chooseBaseDate(req cache.HedgeCalcReq, bpddCode int, bpddName string) (time
 			return time.Time{}, "", errors.New("invalid checkIn format")
 		}
 		// If nonrefundable check...
-		if req.Nonrefundable.Present && req.Nonrefundable.Value {
+		if req.Nonrefundable {
 			t = req.BookingCreatedAt.UTC()
 			if t.IsZero() {
 				return time.Time{}, "", errors.New("invalid bookingCreatedAt format")
@@ -54,7 +54,7 @@ func chooseBaseDate(req cache.HedgeCalcReq, bpddCode int, bpddName string) (time
 			return time.Time{}, "", errors.New("invalid checkOut format")
 		}
 		// If nonrefundable check...
-		if req.Nonrefundable.Present && req.Nonrefundable.Value {
+		if req.Nonrefundable {
 			t = req.BookingCreatedAt.UTC()
 			if t.IsZero() {
 				return time.Time{}, "", errors.New("invalid bookingCreatedAt format")
@@ -77,7 +77,7 @@ func chooseBaseDate(req cache.HedgeCalcReq, bpddCode int, bpddName string) (time
 			return time.Time{}, "", errors.New("invalid cancellationDeadline format")
 		}
 		// If nonrefundable check...
-		if req.Nonrefundable.Present && req.Nonrefundable.Value {
+		if req.Nonrefundable {
 			t = req.BookingCreatedAt.UTC()
 			if t.IsZero() {
 				return time.Time{}, "", errors.New("invalid bookingCreatedAt format")

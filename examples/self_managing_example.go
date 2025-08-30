@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
@@ -29,8 +30,22 @@ func main() {
 		log.Fatalf("Failed to initialize: %v", err)
 	}
 
-	req := cache.HedgeCalcReq{}
-	hedgingService.GiveMeRate(req)
+	req := cache.HedgeCalcReq{
+		AgencyId:             22,
+		From:                 "AED",
+		To:                   "EUR",
+		Nonrefundable:        true,
+		CheckIn:              "2025-09-02",
+		CheckOut:             "2025-09-04",
+		CancellationDeadline: time.Now().UTC().Add(-11 * time.Hour * 24 * 2),
+		BookingCreatedAt:     time.Now().UTC(),
+	}
+	rate, err := hedgingService.GiveMeRate(req)
+	if err != nil {
+		return
+	}
+	rateJson, _ := json.Marshal(rate)
+	log.Printf("HedgingService.GiveMeRate: %s", rateJson)
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
