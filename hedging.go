@@ -11,7 +11,7 @@ type Client struct {
 }
 
 // NewClient creates a new hedging service client
-func NewClient(options ...service.ServiceOption) (*Client, error) {
+func NewClient(options ...ServiceOption) (*Client, error) {
 	svc, err := service.NewHedgingService(options...)
 	if err != nil {
 		return nil, err
@@ -46,6 +46,7 @@ func (c *Client) Stop() error {
 // Service options (re-exported for convenience)
 type ServiceOption = service.ServiceOption
 
+// Re-export service options for clean API
 var (
 	WithRateBaseUrl          = service.WithRateBaseUrl
 	WithPaymentTermsBaseUrl  = service.WithPaymentTermsBaseUrl
@@ -53,4 +54,12 @@ var (
 	WithRatesRefreshInterval = service.WithRatesRefreshInterval
 	WithTermsRefreshInterval = service.WithTermsRefreshInterval
 	WithLogging              = service.WithLogging
+)
+
+// Re-export common types for convenience
+type (
+	HedgeCalcReq   = storage.HedgeCalcReq
+	GiveMeRateResp = storage.GiveMeRateResp
+	RatesEnvelope  = storage.RatesEnvelope
+	TermsCacheData = storage.TermsCacheData
 )

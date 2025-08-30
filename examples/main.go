@@ -8,8 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/omerorhan/hedging-service/internal/storage"
-	"github.com/omerorhan/hedging-service/pkg/hedging"
+	"github.com/omerorhan/hedging-service"
 )
 
 func main() {
@@ -30,7 +29,7 @@ func main() {
 		log.Fatalf("Failed to initialize: %v", err)
 	}
 
-	req := storage.HedgeCalcReq{
+	req := hedging.HedgeCalcReq{
 		AgencyId:             22,
 		From:                 "AED",
 		To:                   "EUR",
