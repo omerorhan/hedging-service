@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,8 +24,27 @@ type RedisCache struct {
 func NewRedisCache(addr string, options ...RedisOption) (*RedisCache, error) {
 	opts := DefaultCacheOptions()
 
+	u, err := url.Parse(addr)
+	if err != nil {
+		panic("can't parse url for redis " + err.Error())
+	}
+	var passwd string
+	if u.User != nil {
+		passwd, _ = u.User.Password()
+	}
+	db := 0
+	if 1 < len(u.Path) {
+		db, err = strconv.Atoi(u.Path[1:])
+		if err != nil {
+			panic(fmt.Sprintf("can't convert string into int for redis db; %s; %s", err.Error(), string(addr)))
+		}
+	}
+
 	client := redis.NewClient(&redis.Options{
-		Addr: addr,
+		Network:  u.Scheme,
+		Addr:     u.Host,
+		Password: passwd,
+		DB:       db,
 	})
 
 	// Test connection

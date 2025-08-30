@@ -7,13 +7,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/omerorhan/hedging-service/pkg/cache"
 	"github.com/omerorhan/hedging-service/pkg/service"
 )
 
 func main() {
 	// Create service
 	hedgingService, err := service.NewHedgingService(
-		service.WithRedisConfig("localhost:6379", "", 0),
+		service.WithRedisConfig("tcp://localhost:6379/0", "", 0),
 		service.WithRateBaseUrl("https://api.example.com", "user:pass"),
 		service.WithPaymentTermsBaseUrl("https://api.example.com", "user:pass"),
 		service.WithRatesRefreshInterval(1*time.Hour),
@@ -27,6 +28,9 @@ func main() {
 	if err := hedgingService.Initialize(); err != nil {
 		log.Fatalf("Failed to initialize: %v", err)
 	}
+
+	req := cache.HedgeCalcReq{}
+	hedgingService.GiveMeRate(req)
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
