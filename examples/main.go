@@ -29,7 +29,7 @@ func main() {
 		log.Fatalf("Failed to initialize: %v", err)
 	}
 
-	req := hedging.HedgeCalcReq{
+	req := hedging.GiveMeRateReq{
 		AgencyId:             22,
 		From:                 "AED",
 		To:                   "EUR",

@@ -8,7 +8,7 @@ import (
 	"github.com/omerorhan/hedging-service/internal/storage"
 )
 
-func chooseBaseDate(req storage.HedgeCalcReq, bpddCode int, bpddName string) (time.Time, string, error) {
+func chooseBaseDate(req GiveMeRateReq, bpddCode int, bpddName string) (time.Time, string, error) {
 	switch bpddName {
 	case CheckIn:
 		if req.CheckIn == "" {

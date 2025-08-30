@@ -27,13 +27,8 @@ func (c *Client) Initialize() error {
 	return c.service.Initialize()
 }
 
-// GetRate calculates and returns the hedging rate for a given request
-func (c *Client) GetRate(req storage.HedgeCalcReq) (*storage.GiveMeRateResp, error) {
-	return c.service.GiveMeRate(req)
-}
-
 // GiveMeRate is an alias for GetRate for backward compatibility
-func (c *Client) GiveMeRate(req storage.HedgeCalcReq) (*storage.GiveMeRateResp, error) {
+func (c *Client) GiveMeRate(req GiveMeRateReq) (*GiveMeRateResp, error) {
 	return c.service.GiveMeRate(req)
 }
 
@@ -58,8 +53,8 @@ var (
 
 // Re-export common types for convenience
 type (
-	HedgeCalcReq   = storage.HedgeCalcReq
-	GiveMeRateResp = storage.GiveMeRateResp
+	GiveMeRateReq  = service.GiveMeRateReq
+	GiveMeRateResp = service.GiveMeRateResp
 	RatesEnvelope  = storage.RatesEnvelope
 	TermsCacheData = storage.TermsCacheData
 )

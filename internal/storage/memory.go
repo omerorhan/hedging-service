@@ -123,10 +123,10 @@ func (mc *MemoryCache) GetRates(pairKey PairKey) (RateData, error) {
 	}, nil
 }
 
-func (mc *MemoryCache) GetTerms(req HedgeCalcReq) (*AgencyPaymentTerm, string, string, error) {
+func (mc *MemoryCache) GetTerms(agencyId int) (*AgencyPaymentTerm, string, string, error) {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-	term, ok := mc.paymentTerms.byAgency[req.AgencyId]
+	term, ok := mc.paymentTerms.byAgency[agencyId]
 	if !ok {
 		return nil, "", "", fmt.Errorf("agency terms not found")
 	}

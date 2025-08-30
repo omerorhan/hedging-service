@@ -4,30 +4,29 @@ import (
 	"time"
 )
 
-// Data structures from source code for bulk loading
 type PairKey string
 type RateRec struct {
-	Spot   *float64 `json:"spot"`
-	Tenors []Tenor  `json:"tenors"`
+	Spot   *float64
+	Tenors []Tenor
 }
 
 type Tenor struct {
-	Days int     `json:"days"`
-	Rate float64 `json:"rate"`
+	Days int
+	Rate float64
 }
 
 type AgencyPaymentTerm struct {
-	AgencyId              int `json:"agencyId"`
-	BaseForPaymentDueDate int `json:"baseForPaymentDueDate"`
-	PaymentFrequency      int `json:"paymentFrequency"`
-	DaysAfter             int `json:"daysAfterPaymentPeriod"`
+	AgencyId              int
+	BaseForPaymentDueDate int
+	PaymentFrequency      int
+	DaysAfter             int
 }
 
 type TermsCacheData struct {
-	ByAgency    map[int]AgencyPaymentTerm `json:"by_agency"`
-	BpddNames   map[int]string            `json:"bpdd_names"`
-	FreqNames   map[int]string            `json:"freq_names"`
-	LastRefresh time.Time                 `json:"last_refresh"`
+	ByAgency    map[int]AgencyPaymentTerm
+	BpddNames   map[int]string
+	FreqNames   map[int]string
+	LastRefresh time.Time
 }
 
 // Cache defines the interface for caching operations
@@ -40,7 +39,7 @@ type Cache interface {
 }
 
 type CacheOptions struct {
-	DefaultTTL time.Duration `json:"defaultTTL"`
+	DefaultTTL time.Duration
 }
 
 func DefaultCacheOptions() *CacheOptions {

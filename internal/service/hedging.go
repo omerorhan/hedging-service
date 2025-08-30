@@ -18,27 +18,16 @@ import (
 // Data structures from your source code for API responses
 // Use types from storage package for consistency
 type RatesEnvelope = storage.RatesEnvelope
+type PaymentTermsEnvelope = storage.PaymentTermsEnvelope
 type CurrencyCollection = storage.CurrencyCollection
 type HedgedPair = storage.HedgedPair
 type SpotPair = storage.SpotPair
-
-type PaymentTermsEnvelope struct {
-	AgencyPaymentTerms       []AgencyPaymentTerm `json:"agencyPaymentTerms"`
-	BaseForPaymentDueDateMap []EnumMap           `json:"baseForPaymentDueDateMap"`
-	PaymentFrequencyMap      []EnumMap           `json:"paymentFrequencyMap"`
-	ErrorMessage             string              `json:"errorMessage"`
-}
 
 type AgencyPaymentTerm struct {
 	AgencyId              int `json:"agencyId"`
 	BaseForPaymentDueDate int `json:"baseForPaymentDueDate"`
 	PaymentFrequency      int `json:"paymentFrequency"`
 	DaysAfter             int `json:"daysAfterPaymentPeriod"`
-}
-
-type EnumMap struct {
-	Id   int    `json:"id"`
-	Name string `json:"name"`
 }
 
 func parseBasicAuthPair(auth string) (username, password string, ok bool) {
@@ -333,12 +322,12 @@ func (hs *HedgingService) refreshPaymentTerms() {
 	hs.log("✅ Payment terms refreshed successfully")
 }
 
-func (hs *HedgingService) GiveMeRate(req storage.HedgeCalcReq) (*storage.GiveMeRateResp, error) {
+func (hs *HedgingService) GiveMeRate(req GiveMeRateReq) (*GiveMeRateResp, error) {
 	if !hs.initialized {
 		return nil, fmt.Errorf("service not initialized - call Initialize() first")
 	}
 
-	term, bpddName, freqName, err := hs.memCache.GetTerms(req)
+	term, bpddName, freqName, err := hs.memCache.GetTerms(req.AgencyId)
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +392,7 @@ func (hs *HedgingService) GiveMeRate(req storage.HedgeCalcReq) (*storage.GiveMeR
 
 	dueDate := req.BookingCreatedAt.Add(time.Duration(dth) * 24 * time.Hour)
 
-	resp := &storage.GiveMeRateResp{
+	resp := &GiveMeRateResp{
 		From:         req.From,
 		To:           req.To,
 		Rate:         rate,
