@@ -42,7 +42,7 @@ func main() {
 	}
 	rate, err := hedgingService.GiveMeRate(req)
 	if err != nil {
-		return
+		log.Fatalf("error : %v", err)
 	}
 	rateJson, _ := json.Marshal(rate)
 	log.Printf("HedgingService.GiveMeRate: %s", rateJson)

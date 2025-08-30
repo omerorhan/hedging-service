@@ -16,36 +16,11 @@ import (
 )
 
 // Data structures from your source code for API responses
-type RatesEnvelope struct {
-	CurrencyCollection CurrencyCollection `json:"currencyCollection"`
-	Revision           int                `json:"revision"`
-	ValidUntilDate     string             `json:"validUntilDate"`
-	TenorCalcDate      string             `json:"tenorCalculationDate"`
-	IsSuccessful       bool               `json:"isSuccessful"`
-	Error              any                `json:"error"`
-}
-
-type CurrencyCollection struct {
-	Hedged []HedgedPair `json:"hedged"`
-	Spot   []SpotPair   `json:"spot"`
-}
-
-type HedgedPair struct {
-	From string  `json:"fromCurrency"`
-	To   string  `json:"toCurrency"`
-	Ten  []Tenor `json:"tenors"`
-}
-
-type SpotPair struct {
-	From string  `json:"fromCurrency"`
-	To   string  `json:"toCurrency"`
-	Rate float64 `json:"rate"`
-}
-
-type Tenor struct {
-	Days int     `json:"days"`
-	Rate float64 `json:"rate"`
-}
+// Use types from cache package for consistency
+type RatesEnvelope = cache.RatesEnvelope
+type CurrencyCollection = cache.CurrencyCollection
+type HedgedPair = cache.HedgedPair
+type SpotPair = cache.SpotPair
 
 type PaymentTermsEnvelope struct {
 	AgencyPaymentTerms       []AgencyPaymentTerm `json:"agencyPaymentTerms"`
@@ -216,99 +191,53 @@ func (hs *HedgingService) Initialize() error {
 func (hs *HedgingService) initializeCachesFromRedis() error {
 	hs.log("📥 Loading existing data from Redis...")
 
-	// Load rates from Redis and store in memory
-	rates, err := hs.loadRatesFromRedis()
-	if err != nil {
-		hs.log("⚠️ Warning: Failed to load rates from Redis: %v", err)
-	} else if rates != nil {
-		hs.log("✅ Loaded %d rate pairs from Redis", len(rates))
+	ratesFromBackup, err := hs.redisCache.GetRatesBackup()
+	ratesNeedsRefresh := true
 
-		// Store each rate pair in memory cache
-		err := hs.memCache.SetRates(rates)
+	if err != nil {
+		hs.log("⚠️ Warning: Failed to load backup from Redis: %v", err)
+	} else if ratesFromBackup != nil {
+		hs.log("✅ Loaded backup from Redis (revision: %d)", ratesFromBackup.Revision)
+		ratesNeedsRefresh = false
+
+		validUntil, err := time.Parse(time.RFC3339, ratesFromBackup.ValidUntilDate)
+		if err != nil || validUntil.IsZero() || validUntil.Before(time.Now().UTC()) {
+			hs.log("⏰ Backup data has expired (validUntil: %s), will force refresh", ratesFromBackup.ValidUntilDate)
+			ratesNeedsRefresh = true
+		}
+	}
+
+	if ratesNeedsRefresh {
+		hs.refreshRates()
+	} else {
+		// dump rates to memory from backup
+		err := hs.memCache.DumpRates(ratesFromBackup)
 		if err != nil {
 			return err
 		}
 	}
-	if rates == nil {
-		hs.ForceRefresh()
-	}
 
-	// Load payment terms from Redis using your existing data structure
-	terms, err := hs.loadPaymentTermsFromRedis()
+	termsNeedsRefresh := true
+	// Load payment terms from Redis
+	termsFromBackup, err := hs.redisCache.GetTermsBackup()
 	if err != nil {
 		hs.log("⚠️ Warning: Failed to load payment terms from Redis: %v", err)
-	} else if terms != nil {
-		hs.log("✅ Loaded payment terms for %d agencies from Redis", len(terms.ByAgency))
+	} else if termsFromBackup != nil {
+		hs.log("✅ Loaded payment terms for %d agencies from Redis", len(termsFromBackup.ByAgency))
+		termsNeedsRefresh = false
 
-		err := hs.memCache.SetPaymentTerms(terms)
-		if err != nil {
-			return err
-		}
-	}
-
-	if rev, err := hs.GetRatesRevision(); err == nil && rev != 0 {
-		err := hs.memCache.SetRevision(rev)
+		err := hs.memCache.DumpTerms(termsFromBackup)
 		if err != nil {
 			return err
 		}
 	}
 
-	if validUntil, err := hs.GetRatesValidUntil(); err == nil && !validUntil.IsZero() {
-		err := hs.memCache.SetRatesValidUntil(validUntil)
-		if err != nil {
-			return err
-		}
+	if termsNeedsRefresh {
+		hs.refreshPaymentTerms()
 	}
 
-	if tenorCalc, err := hs.GetRatesTenorCalcDate(); err == nil && !tenorCalc.IsZero() {
-		err := hs.memCache.SetRatesTenorCalcDate(tenorCalc)
-		if err != nil {
-			return err
-		}
-	}
-	if ratesLastRefreshed, err := hs.GetRatesLastRefreshed(); err == nil && !ratesLastRefreshed.IsZero() {
-		err := hs.memCache.SetRatesLastRefreshed(ratesLastRefreshed)
-		if err != nil {
-			return err
-		}
-	}
-	if termsLastRefreshed, err := hs.GetTermsLastRefreshed(); err == nil && !termsLastRefreshed.IsZero() {
-		err := hs.memCache.SetTermsLastRefreshed(termsLastRefreshed)
-		if err != nil {
-			return err
-		}
-	}
 	hs.log("📊 Cache initialization completed")
 	return nil
-}
-
-// loadRatesFromRedis loads rates from Redis using your existing structure
-func (hs *HedgingService) loadRatesFromRedis() (map[cache.PairKey]cache.RateRec, error) {
-	return hs.redisCache.GetRates()
-}
-
-// loadPaymentTermsFromRedis loads payment terms from Redis using your existing structure
-func (hs *HedgingService) loadPaymentTermsFromRedis() (*cache.TermsCacheData, error) {
-	return hs.redisCache.GetTerms()
-}
-
-func (hs *HedgingService) GetRatesRevision() (int, error) {
-	return hs.redisCache.GetRatesRevision()
-}
-
-func (hs *HedgingService) GetRatesValidUntil() (time.Time, error) {
-	return hs.redisCache.GetRatesValidUntil()
-}
-
-func (hs *HedgingService) GetRatesTenorCalcDate() (time.Time, error) {
-	return hs.redisCache.GetRatesTenorCalcDate()
-}
-
-func (hs *HedgingService) GetRatesLastRefreshed() (time.Time, error) {
-	return hs.redisCache.GetRatesLastRefreshed()
-}
-func (hs *HedgingService) GetTermsLastRefreshed() (time.Time, error) {
-	return hs.redisCache.GetTermsLastRefreshed()
 }
 
 // startSchedulers starts background goroutines to keep data fresh
@@ -321,7 +250,7 @@ func (hs *HedgingService) startSchedulers() {
 
 	// Start payment terms refresh scheduler
 	hs.wg.Add(1)
-	go hs.paymentTermsRefreshScheduler()
+	go hs.termsRefreshScheduler()
 
 	hs.log("✅ Schedulers started")
 }
@@ -346,7 +275,7 @@ func (hs *HedgingService) ratesRefreshScheduler() {
 }
 
 // paymentTermsRefreshScheduler periodically refreshes payment terms
-func (hs *HedgingService) paymentTermsRefreshScheduler() {
+func (hs *HedgingService) termsRefreshScheduler() {
 	defer hs.wg.Done()
 
 	ticker := time.NewTicker(hs.opts.TermsRefreshInterval) // Less frequent
@@ -409,15 +338,9 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 		return nil, fmt.Errorf("service not initialized - call Initialize() first")
 	}
 
-	term, bpddName, freqName, err := hs.memCache.GetPaymentTermData(req)
+	term, bpddName, freqName, err := hs.memCache.GetTerms(req)
 	if err != nil {
-		log.Printf("Payment Term could not be found through memCache: %v\n", err)
-
-		// term, bpddName, freqName, err = hs.redisCache.GetPaymentTermData(req)
-		// if err != nil {
-		// 	log.Printf("Payment Term Also could not be found through Redis: %v", err)
-		// 	return nil, err
-		// }
+		return nil, err
 	}
 
 	// Base date
@@ -438,24 +361,24 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 	// Rates pair
 	pairKey := getPairKey(req.From, req.To)
 
+	// Get all rate data in a single call
+	rateData, err := hs.memCache.GetRates(pairKey)
+	if err != nil {
+		return nil, err
+	}
+
 	rate := 1.00 // same
 	rateType := "spot"
 	var explain string
-	if strings.ToUpper(req.From) != strings.ToUpper(req.To) {
-		rc, ok := hs.memCache.GetPair(pairKey)
-		if !ok {
-			log.Printf("Rate Pairs (from: %s-> to: %s) not be found through Memcache: %v\n", req.From, req.To, err)
-			// log.Printf("...checking pairs on redis...")
-			// if rc, ok = hs.redisCache.GetPair(pairKey); !ok {
-			// 	return nil, fmt.Errorf("Rate Pairs (from: %s-> to: %s) also cannnot be found through Memory\n", req.From, req.To)
-			// }
+	if !strings.EqualFold(req.From, req.To) {
+		// Select tenor
+		ten, err := selectTenor(rateData.Pair.Tenors, dth) // adapt to your struct field name (Tenors vs tenors)
+		if err != nil {
+			return nil, err
 		}
 
-		// Select tenor
-		ten, _ := selectTenor(rc.Tenors, dth) // adapt to your struct field name (Tenors vs tenors)
-
-		if rc.Spot != nil && (ten.Rate == 0 || ten.Days == 0) {
-			rate = *rc.Spot
+		if rateData.Pair.Spot != nil && (ten.Rate == 0 || ten.Days == 0) {
+			rate = *rateData.Pair.Spot
 			rateType = "spot"
 		} else {
 			rate = ten.Rate
@@ -465,25 +388,19 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 		explain = fmt.Sprintf("%s => Base=%s; Lead=%dd + DaysDue(%d) => DaysToHedge=%d; tenor=%dd",
 			ddExplain, baseSrc, lead, dd, dth, ten.Days)
 	}
-	validUntil := hs.memCache.GetRatesValidUntil()
-	// if err != nil {
-	// 	return nil, fmt.Errorf("rate validUntil could not be found through Redis")
-	// }
+
+	// Use validUntil and revisionNumber from the single call
+	validUntil := rateData.ValidUntil
+	revisionNumber := rateData.RevisionNumber
 
 	if validUntil.IsZero() || validUntil.Before(time.Now().UTC()) {
 		return nil, fmt.Errorf("rate validUntil has passed, it's not valid anymore")
 	}
 
-	revisionNumber := hs.memCache.GetRevision()
 	if revisionNumber == 0 {
 		return nil, fmt.Errorf("rate revision could not be found through memory: %v", err)
 	}
 
-	// if err != nil {
-	// 	log.Printf("Rate revision could not be found through Redis: %v\n", err)
-	// 	revisionNumber = hs.memCache.GetRevision()
-	//
-	// }
 	dueDate := req.BookingCreatedAt.Add(time.Duration(dth) * 24 * time.Hour)
 
 	resp := &cache.GiveMeRateResp{
@@ -498,13 +415,6 @@ func (hs *HedgingService) GiveMeRate(req cache.HedgeCalcReq) (*cache.GiveMeRateR
 		Explain:      explain,
 	}
 	return resp, nil
-}
-
-func (hs *HedgingService) ForceRefresh() {
-	hs.log("🔄 Force refreshing all data...")
-	hs.refreshRates()
-	hs.refreshPaymentTerms()
-	hs.log("✅ Force refresh completed")
 }
 
 // Stop gracefully shuts down the service
@@ -572,70 +482,25 @@ func (hs *HedgingService) fetchPaymentTerms(ctx context.Context) (*PaymentTermsE
 	return &env, nil
 }
 
-// hydrateRates hydrates rates data using your source code logic
-func (hs *HedgingService) hydrateRates(envelope *RatesEnvelope) error {
+// hydrateRates hydrates rates data using simplified backup approach
+func (hs *HedgingService) hydrateRates(envelope *cache.RatesEnvelope) error {
 	if envelope == nil || !envelope.IsSuccessful {
 		return errors.New("bad rates envelope or unsuccessful")
 	}
-	rec := make(map[cache.PairKey]cache.RateRec)
-	for _, h := range envelope.CurrencyCollection.Hedged {
-		k := cache.PairKey(strings.ToUpper(h.From) + "->" + strings.ToUpper(h.To))
-		tenors := make([]cache.Tenor, len(h.Ten))
-		for i, t := range h.Ten {
-			tenors[i] = cache.Tenor{Days: t.Days, Rate: t.Rate}
-		}
-		rec[k] = cache.RateRec{Tenors: tenors}
-	}
-	for _, s := range envelope.CurrencyCollection.Spot {
-		k := cache.PairKey(strings.ToUpper(s.From) + "->" + strings.ToUpper(s.To))
-		cur := rec[k]
-		cur.Spot = &[]float64{s.Rate}[0]
-		rec[k] = cur
+
+	// PRIORITY 1: Store complete provider backup in Redis (single key, simple scaling)
+	if err := hs.redisCache.SetRatesBackup(envelope); err != nil {
+		hs.log("Warning: failed to store backup in Redis: %v", err)
+		// Continue anyway - we'll still process for memory
 	}
 
-	// Store in Redis cache using bulk method
-	if err := hs.redisCache.SetRates(rec); err != nil {
-		hs.log("Warning: failed to store rates in Redis: %v", err)
-	}
-	if err := hs.redisCache.SetRatesRevision(envelope.Revision); err != nil {
-		log.Printf("Warning: failed to store rates revision in Redis: %v", err)
-	}
-	if err := hs.redisCache.SetRatesValidUntil(mustParseISODate(envelope.ValidUntilDate)); err != nil {
-		log.Printf("Warning: failed to store rates valid until in Redis: %v", err)
-	}
-	if err := hs.redisCache.SetRatesTenorCalcDate(mustParseISODate(envelope.TenorCalcDate)); err != nil {
-		log.Printf("Warning: failed to store rates tenor calc date in Redis: %v", err)
-	}
-	if err := hs.redisCache.SetRatesLastRefreshed(time.Now().UTC()); err != nil {
-		log.Printf("Warning: failed to store last refreshed in Redis: %v", err)
+	// PRIORITY 2: Process and store in memory cache for immediate use
+	if err := hs.memCache.DumpRates(envelope); err != nil {
+		return fmt.Errorf("failed to process data in memory cache: %w", err)
 	}
 
-	err := hs.memCache.SetRates(rec)
-	if err != nil {
-		return err
-	}
-
-	err = hs.memCache.SetRevision(envelope.Revision)
-	if err != nil {
-		return err
-	}
-
-	err = hs.memCache.SetRatesValidUntil(mustParseISODate(envelope.ValidUntilDate))
-	if err != nil {
-		return err
-	}
-
-	err = hs.memCache.SetRatesTenorCalcDate(mustParseISODate(envelope.TenorCalcDate))
-	if err != nil {
-		return err
-	}
-
-	err = hs.memCache.SetRatesLastRefreshed(time.Now().UTC())
-	if err != nil {
-		return err
-	}
-
-	hs.log("Hydrated rates count: %d", len(rec))
+	hs.log("✅ Stored backup in Redis and processed %d currency pairs in memory",
+		len(envelope.CurrencyCollection.Hedged)+len(envelope.CurrencyCollection.Spot))
 	return nil
 }
 
@@ -662,26 +527,18 @@ func (hs *HedgingService) hydrateTerms(envelope *PaymentTermsEnvelope) error {
 		freq[e.Id] = e.Name
 	}
 
-	// Store in Redis cache using bulk method
+	// Store in Redis cache
 	termsData := &cache.TermsCacheData{
-		ByAgency:  m,
-		BpddNames: bpdd,
-		FreqNames: freq,
+		ByAgency:    m,
+		BpddNames:   bpdd,
+		FreqNames:   freq,
+		LastRefresh: time.Now().UTC(),
 	}
-	if err := hs.redisCache.SetTerms(termsData); err != nil {
+	if err := hs.redisCache.SetTermsBackup(termsData); err != nil {
 		hs.log("Warning: failed to store terms in Redis: %v", err)
 	}
-	now := time.Now().UTC()
-	if err := hs.redisCache.SetTermsLastRefreshed(now); err != nil {
-		log.Printf("Warning: failed to store last refreshed in Redis: %v", err)
-	}
 
-	err := hs.memCache.SetPaymentTerms(termsData)
-	if err != nil {
-		return err
-	}
-
-	err = hs.memCache.SetTermsLastRefreshed(now)
+	err := hs.memCache.DumpTerms(termsData)
 	if err != nil {
 		return err
 	}

@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"context"
 	"time"
 )
 
@@ -25,49 +24,27 @@ type AgencyPaymentTerm struct {
 }
 
 type TermsCacheData struct {
-	ByAgency  map[int]AgencyPaymentTerm `json:"by_agency"`
-	BpddNames map[int]string            `json:"bpdd_names"`
-	FreqNames map[int]string            `json:"freq_names"`
+	ByAgency    map[int]AgencyPaymentTerm `json:"by_agency"`
+	BpddNames   map[int]string            `json:"bpdd_names"`
+	FreqNames   map[int]string            `json:"freq_names"`
+	LastRefresh time.Time                 `json:"last_refresh"`
 }
 
 // Cache defines the interface for caching operations
 type Cache interface {
-	GetPair(pairKey PairKey) (RateRec, bool)
-	GetPaymentTermData(req HedgeCalcReq) (*AgencyPaymentTerm, string, string, error)
-	SetRates(rates map[PairKey]RateRec) error
-	GetRates() (map[PairKey]RateRec, error)
-	GetRatesRevision() (int, error)
-	SetRatesRevision(rev int) error
-	GetRatesValidUntil() (time.Time, error)
-	SetRatesValidUntil(t time.Time) error
-	GetRatesTenorCalcDate() (time.Time, error)
-	SetRatesTenorCalcDate(t time.Time) error
-	GetTerms() (*TermsCacheData, error)
-	SetTerms(terms *TermsCacheData) error
-	GetRatesLastRefreshed() (time.Time, error)
-	SetRatesLastRefreshed(t time.Time) error
-	GetTermsLastRefreshed() (time.Time, error)
-	SetTermsLastRefreshed(t time.Time) error
-	FlushAll() error
-	Flush(ctx context.Context) error
-	GetStats() (map[string]interface{}, error)
+	SetRatesBackup(envelope *RatesEnvelope) error
+	GetRatesBackup() (*RatesEnvelope, error)
+	SetTermsBackup(terms *TermsCacheData) error
+	GetTermsBackup() (*TermsCacheData, error)
 	Close() error
 }
 
 type CacheOptions struct {
-	DefaultTTL      time.Duration `json:"defaultTTL"`
-	MaxMemory       int64         `json:"maxMemory"` // in bytes
-	MaxKeys         int64         `json:"maxKeys"`
-	CleanupInterval time.Duration `json:"cleanupInterval"`
-	Compression     bool          `json:"compression"`
+	DefaultTTL time.Duration `json:"defaultTTL"`
 }
 
 func DefaultCacheOptions() *CacheOptions {
 	return &CacheOptions{
-		DefaultTTL:      24 * time.Hour,
-		MaxMemory:       100 * 1024 * 1024, // 100MB
-		MaxKeys:         10000,
-		CleanupInterval: 1 * time.Hour,
-		Compression:     false,
+		DefaultTTL: 24 * time.Hour,
 	}
 }

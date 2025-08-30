@@ -2,7 +2,7 @@ package cache
 
 import (
 	"fmt"
-	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,25 +44,7 @@ func NewMemoryCache() *MemoryCache {
 	}
 	return cache
 }
-
-func (mc *MemoryCache) SetRates(rates map[PairKey]RateRec) error {
-	mc.mu.Lock()
-	mc.rates.pairs = rates
-	mc.mu.Unlock()
-
-	log.Printf("Set rates from Redis into memory")
-	return nil
-}
-
-func (mc *MemoryCache) GetPair(pairKey PairKey) (RateRec, bool) {
-	mc.mu.RLock()
-	defer mc.mu.RUnlock()
-	rc, ok := mc.rates.pairs[pairKey]
-	return rc, ok
-}
-
-// SetPaymentTerms caches payment terms
-func (mc *MemoryCache) SetPaymentTerms(terms *TermsCacheData) error {
+func (mc *MemoryCache) DumpTerms(terms *TermsCacheData) error {
 	if terms == nil {
 		return nil
 	}
@@ -70,67 +52,84 @@ func (mc *MemoryCache) SetPaymentTerms(terms *TermsCacheData) error {
 	mc.paymentTerms.byAgency = terms.ByAgency
 	mc.paymentTerms.bpddNames = terms.BpddNames
 	mc.paymentTerms.freqNames = terms.FreqNames
+	mc.paymentTerms.lastRefreshed = terms.LastRefresh
 	mc.mu.Unlock()
-	log.Printf("Set payment terms from Redis into memory")
+
 	return nil
 }
 
-func (mc *MemoryCache) SetRevision(rev int) error {
+func (mc *MemoryCache) DumpRates(envelope *RatesEnvelope) error {
+	if envelope == nil || !envelope.IsSuccessful {
+		return fmt.Errorf("invalid rates envelope")
+	}
+
+	rates := make(map[PairKey]RateRec)
+
+	// Process hedged pairs
+	for _, h := range envelope.CurrencyCollection.Hedged {
+		k := PairKey(strings.ToUpper(h.From) + "->" + strings.ToUpper(h.To))
+		tenors := make([]Tenor, len(h.Ten))
+		for i, t := range h.Ten {
+			tenors[i] = Tenor{Days: t.Days, Rate: t.Rate}
+		}
+		rates[k] = RateRec{Tenors: tenors}
+	}
+
+	// Process spot pairs
+	for _, s := range envelope.CurrencyCollection.Spot {
+		k := PairKey(strings.ToUpper(s.From) + "->" + strings.ToUpper(s.To))
+		cur := rates[k]
+		cur.Spot = &s.Rate
+		rates[k] = cur
+	}
+
+	// Parse dates
+	validUntil, err := time.Parse(time.RFC3339, envelope.ValidUntilDate)
+	if err != nil {
+		return fmt.Errorf("failed to parse validUntilDate: %w", err)
+	}
+
+	tenorCalcDate, err := time.Parse(time.RFC3339, envelope.TenorCalcDate)
+	if err != nil {
+		return fmt.Errorf("failed to parse tenorCalcDate: %w", err)
+	}
+
+	// Store all data atomically in memory
 	mc.mu.Lock()
-	mc.rates.rev = rev
-	mc.mu.Unlock()
+	defer mc.mu.Unlock()
+
+	mc.rates.pairs = rates
+	mc.rates.rev = envelope.Revision
+	mc.rates.validUntilUTC = validUntil
+	mc.rates.tenorCalcDate = tenorCalcDate
+	mc.rates.lastRefreshed = time.Now().UTC()
 
 	return nil
 }
 
-func (mc *MemoryCache) GetRevision() int {
-	mc.mu.RLock()
-	mc.mu.RUnlock()
-
-	return mc.rates.rev
-}
-
-func (mc *MemoryCache) GetRatesValidUntil() time.Time {
+func (mc *MemoryCache) GetRates(pairKey PairKey) (RateData, error) {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
 
-	return mc.rates.validUntilUTC
-}
-func (mc *MemoryCache) SetRatesValidUntil(validUntil time.Time) error {
-	mc.mu.Lock()
-	mc.rates.validUntilUTC = validUntil
-	mc.mu.Unlock()
+	rc, found := mc.rates.pairs[pairKey]
+	if !found {
+		return RateData{}, fmt.Errorf("no such rate: %s", pairKey)
+	}
 
-	return nil
-}
-
-func (mc *MemoryCache) SetRatesTenorCalcDate(tenorCalc time.Time) error {
-	mc.mu.Lock()
-	mc.rates.tenorCalcDate = tenorCalc
-	mc.mu.Unlock()
-
-	return nil
+	return RateData{
+		Pair:           rc,
+		ValidUntil:     mc.rates.validUntilUTC,
+		RevisionNumber: mc.rates.rev,
+	}, nil
 }
 
-func (mc *MemoryCache) SetRatesLastRefreshed(lastRefreshed time.Time) error {
-	mc.mu.Lock()
-	mc.rates.lastRefreshed = lastRefreshed
-	mc.mu.Unlock()
-
-	return nil
-}
-
-func (mc *MemoryCache) SetTermsLastRefreshed(lastRefreshed time.Time) error {
-	mc.mu.Lock()
-	mc.paymentTerms.lastRefreshed = lastRefreshed
-	mc.mu.Unlock()
-
-	return nil
-}
-
-func (mc *MemoryCache) GetPaymentTermData(req HedgeCalcReq) (*AgencyPaymentTerm, string, string, error) {
+func (mc *MemoryCache) GetTerms(req HedgeCalcReq) (*AgencyPaymentTerm, string, string, error) {
 	mc.mu.RLock()
+	defer mc.mu.RUnlock()
 	term, ok := mc.paymentTerms.byAgency[req.AgencyId]
+	if !ok {
+		return nil, "", "", fmt.Errorf("agency terms not found")
+	}
 	bpddName := mc.paymentTerms.bpddNames[term.BaseForPaymentDueDate]
 	if bpddName == "" && term.BaseForPaymentDueDate == 0 {
 		bpddName = Default // e.g., "Default"
@@ -138,10 +137,6 @@ func (mc *MemoryCache) GetPaymentTermData(req HedgeCalcReq) (*AgencyPaymentTerm,
 	freqName := mc.paymentTerms.freqNames[term.PaymentFrequency]
 	if freqName == "" && term.PaymentFrequency == 0 {
 		freqName = Monthly // e.g., "Monthly"
-	}
-	mc.mu.RUnlock()
-	if !ok {
-		return nil, "", "", fmt.Errorf("agency terms not found")
 	}
 
 	return &term, bpddName, freqName, nil
