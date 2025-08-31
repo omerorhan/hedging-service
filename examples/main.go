@@ -14,7 +14,7 @@ import (
 func main() {
 	// Create service using new clean API
 	client, err := hedging.NewClient(
-		hedging.WithRedisConfig("tcp://localhost:6379", "", 0),
+		hedging.WithRedisConfig("tcp://localhost:6379"),
 		hedging.WithRateBaseUrl("https://api.example.com", "user:pass"),
 		hedging.WithPaymentTermsBaseUrl("https://api.example.com", "user:pass"),
 		hedging.WithRatesRefreshInterval(1*time.Hour),

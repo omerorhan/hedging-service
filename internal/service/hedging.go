@@ -63,7 +63,7 @@ type ServiceOptions struct {
 // DefaultServiceOptions returns sensible default options
 func DefaultServiceOptions() *ServiceOptions {
 	return &ServiceOptions{
-		RedisAddr:          "localhost:6379",
+		RedisAddr:          "tcp://localhost:6379",
 		InitialLoadTimeout: 30 * time.Second,
 		EnableLogging:      true,
 	}
@@ -121,7 +121,7 @@ func WithPaymentTermsBaseUrl(url, auth string) ServiceOption {
 }
 
 // WithRedisConfig sets Redis configuration
-func WithRedisConfig(addr, password string, db int) ServiceOption {
+func WithRedisConfig(addr string) ServiceOption {
 	return func(opts *ServiceOptions) {
 		opts.RedisAddr = addr
 	}
