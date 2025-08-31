@@ -84,12 +84,12 @@ func (mc *MemoryCache) DumpRates(envelope *RatesEnvelope) error {
 	}
 
 	// Parse dates
-	validUntil, err := time.Parse(time.RFC3339, envelope.ValidUntilDate)
+	validUntil, err := time.Parse("2006-01-02T15:04:05", envelope.ValidUntilDate)
 	if err != nil {
 		return fmt.Errorf("failed to parse validUntilDate: %w", err)
 	}
 
-	tenorCalcDate, err := time.Parse(time.RFC3339, envelope.TenorCalcDate)
+	tenorCalcDate, err := time.Parse("2006-01-02T15:04:05", envelope.TenorCalcDate)
 	if err != nil {
 		return fmt.Errorf("failed to parse tenorCalcDate: %w", err)
 	}

@@ -181,7 +181,7 @@ func (hs *HedgingService) initializeCachesFromRedis() error {
 		hs.log("✅ Loaded backup from Redis (revision: %d)", ratesFromBackup.Revision)
 		ratesNeedsRefresh = false
 
-		validUntil, err := time.Parse(time.RFC3339, ratesFromBackup.ValidUntilDate)
+		validUntil, err := time.Parse("2006-01-02T15:04:05", ratesFromBackup.ValidUntilDate)
 		if err != nil || validUntil.IsZero() || validUntil.Before(time.Now().UTC()) {
 			hs.log("⏰ Backup data has expired (validUntil: %s), will force refresh", ratesFromBackup.ValidUntilDate)
 			ratesNeedsRefresh = true
