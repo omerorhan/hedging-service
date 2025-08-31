@@ -394,7 +394,7 @@ func (hs *HedgingService) GiveMeRate(req GiveMeRateReq) (*GiveMeRateResp, error)
 		From:         req.From,
 		To:           req.To,
 		Rate:         rate,
-		IsRefundable: req.Nonrefundable,
+		IsRefundable: !req.Nonrefundable,
 		RevisionId:   revisionNumber,
 		DueDate:      dueDate,
 		ValidUntil:   validUntil,
