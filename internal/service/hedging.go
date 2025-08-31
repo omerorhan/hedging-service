@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -440,7 +439,8 @@ func (hs *HedgingService) Stop() {
 
 func (hs *HedgingService) log(format string, args ...interface{}) {
 	if hs.opts.EnableLogging {
-		log.Printf("[HedgingService] "+format, args...)
+		// Use fmt.Printf to write to stdout (INFO level in GCP) instead of stderr (ERROR level)
+		fmt.Printf("[HedgingService] "+format+"\n", args...)
 	}
 }
 
