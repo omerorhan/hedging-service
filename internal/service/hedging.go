@@ -445,11 +445,37 @@ func (hs *HedgingService) log(format string, args ...interface{}) {
 }
 
 // shouldRefreshRates checks if rates will expire before next refresh
+// Also syncs memory cache with Redis if Redis has newer revision
 func (hs *HedgingService) shouldRefreshRates() bool {
-	// Get current rate metadata to check validUntil
-	validUntil, revision, hasData := hs.memCache.GetRatesMetadata()
-	if !hasData {
-		hs.log("🔄 No rates found - refresh needed")
+	// Get current rate metadata from Redis to check validUntil
+	envelope, err := hs.redisCache.GetRatesBackup()
+	if err != nil {
+		hs.log("⚠️ Failed to get rates backup from Redis: %v - refresh needed", err)
+		return true
+	}
+	if envelope == nil {
+		hs.log("🔄 No rates backup found in Redis - refresh needed")
+		return true
+	}
+
+	// Get current memory cache revision for comparison
+	_, memoryRevision, memoryHasData := hs.memCache.GetRatesMetadata()
+
+	// Check if Redis has newer data than memory (multi-pod sync)
+	if memoryHasData && envelope.Revision > memoryRevision {
+		hs.log("🔄 Redis has newer revision (%d > %d) - syncing memory cache", envelope.Revision, memoryRevision)
+		if err := hs.memCache.DumpRates(envelope); err != nil {
+			hs.log("⚠️ Failed to sync memory cache from Redis: %v", err)
+			// Continue with normal logic despite sync failure
+		} else {
+			hs.log("✅ Memory cache synced with Redis revision %d", envelope.Revision)
+		}
+	}
+
+	// Parse validUntil date from Redis backup
+	validUntil, err := time.Parse("2006-01-02T15:04:05", envelope.ValidUntilDate)
+	if err != nil {
+		hs.log("⚠️ Failed to parse validUntilDate from Redis: %v - refresh needed", err)
 		return true
 	}
 
@@ -465,10 +491,10 @@ func (hs *HedgingService) shouldRefreshRates() bool {
 
 	if willExpire {
 		hs.log("⏰ Rates (rev:%d) expire at %v, next refresh at %v (with buffer) - refresh needed",
-			revision, validUntil.Format(time.RFC3339), safeNextRefresh.Format(time.RFC3339))
+			envelope.Revision, validUntil.Format(time.RFC3339), safeNextRefresh.Format(time.RFC3339))
 	} else {
 		hs.log("✅ Rates (rev:%d) valid until %v, next refresh at %v - no refresh needed",
-			revision, validUntil.Format(time.RFC3339), safeNextRefresh.Format(time.RFC3339))
+			envelope.Revision, validUntil.Format(time.RFC3339), safeNextRefresh.Format(time.RFC3339))
 	}
 
 	return willExpire
