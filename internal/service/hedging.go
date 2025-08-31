@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -239,10 +240,12 @@ func (hs *HedgingService) startSchedulers() {
 func (hs *HedgingService) ratesRefreshScheduler() {
 	defer hs.wg.Done()
 
-	ticker := time.NewTicker(hs.opts.RatesRefreshInterval)
+	// Add jitter (±10% of interval) to prevent thundering herd in K8s
+	jitteredInterval := hs.addJitter(hs.opts.RatesRefreshInterval, 0.1)
+	ticker := time.NewTicker(jitteredInterval)
 	defer ticker.Stop()
 
-	hs.log("🔄 Rates refresh scheduler started (interval: %v)", hs.opts.RatesRefreshInterval)
+	hs.log("🔄 Rates refresh scheduler started (base interval: %v, jittered: %v)", hs.opts.RatesRefreshInterval, jitteredInterval)
 
 	for {
 		select {
@@ -250,7 +253,12 @@ func (hs *HedgingService) ratesRefreshScheduler() {
 			hs.log("🛑 Rates refresh scheduler stopped")
 			return
 		case <-ticker.C:
-			hs.refreshRates()
+			// Add small jitter to each refresh as well
+			go func() {
+				jitterDelay := time.Duration(rand.Int63n(int64(5 * time.Second)))
+				time.Sleep(jitterDelay)
+				hs.refreshRates()
+			}()
 		}
 	}
 }
@@ -259,10 +267,12 @@ func (hs *HedgingService) ratesRefreshScheduler() {
 func (hs *HedgingService) termsRefreshScheduler() {
 	defer hs.wg.Done()
 
-	ticker := time.NewTicker(hs.opts.TermsRefreshInterval) // Less frequent
+	// Add jitter (±10% of interval) to prevent thundering herd in K8s
+	jitteredInterval := hs.addJitter(hs.opts.TermsRefreshInterval, 0.1)
+	ticker := time.NewTicker(jitteredInterval)
 	defer ticker.Stop()
 
-	hs.log("🔄 Payment terms refresh scheduler started (interval: %v)", hs.opts.TermsRefreshInterval)
+	hs.log("🔄 Payment terms refresh scheduler started (base interval: %v, jittered: %v)", hs.opts.TermsRefreshInterval, jitteredInterval)
 
 	for {
 		select {
@@ -270,12 +280,23 @@ func (hs *HedgingService) termsRefreshScheduler() {
 			hs.log("🛑 Payment terms refresh scheduler stopped")
 			return
 		case <-ticker.C:
-			hs.refreshPaymentTerms()
+			// Add small jitter to each refresh as well
+			go func() {
+				jitterDelay := time.Duration(rand.Int63n(int64(10 * time.Second)))
+				time.Sleep(jitterDelay)
+				hs.refreshPaymentTerms()
+			}()
 		}
 	}
 }
 
 func (hs *HedgingService) refreshRates() {
+	// Check if current rates will expire before next refresh
+	if !hs.shouldRefreshRates() {
+		hs.log("⏭️ Skipping rates refresh - current data valid until next refresh")
+		return
+	}
+
 	hs.log("🔄 Refreshing exchange rates...")
 
 	// Fetch fresh rates from external API using your source code logic
@@ -421,6 +442,58 @@ func (hs *HedgingService) log(format string, args ...interface{}) {
 	if hs.opts.EnableLogging {
 		log.Printf("[HedgingService] "+format, args...)
 	}
+}
+
+// shouldRefreshRates checks if rates will expire before next refresh
+func (hs *HedgingService) shouldRefreshRates() bool {
+	// Get current rate metadata to check validUntil
+	validUntil, revision, hasData := hs.memCache.GetRatesMetadata()
+	if !hasData {
+		hs.log("🔄 No rates found - refresh needed")
+		return true
+	}
+
+	now := time.Now().UTC()
+	nextRefresh := now.Add(hs.opts.RatesRefreshInterval)
+
+	// Add buffer time (10% of refresh interval) to ensure we don't cut it too close
+	bufferTime := time.Duration(float64(hs.opts.RatesRefreshInterval) * 0.1)
+	safeNextRefresh := nextRefresh.Add(bufferTime)
+
+	// Refresh if data will expire before next safe refresh
+	willExpire := validUntil.Before(safeNextRefresh)
+
+	if willExpire {
+		hs.log("⏰ Rates (rev:%d) expire at %v, next refresh at %v (with buffer) - refresh needed",
+			revision, validUntil.Format(time.RFC3339), safeNextRefresh.Format(time.RFC3339))
+	} else {
+		hs.log("✅ Rates (rev:%d) valid until %v, next refresh at %v - no refresh needed",
+			revision, validUntil.Format(time.RFC3339), safeNextRefresh.Format(time.RFC3339))
+	}
+
+	return willExpire
+}
+
+// addJitter adds random jitter to prevent thundering herd in K8s deployments
+// jitterPercent should be between 0.0-1.0 (e.g., 0.1 = ±10%)
+func (hs *HedgingService) addJitter(duration time.Duration, jitterPercent float64) time.Duration {
+	if jitterPercent <= 0 {
+		return duration
+	}
+
+	// Calculate jitter range
+	jitterRange := float64(duration) * jitterPercent
+
+	// Generate random jitter: ±jitterPercent of original duration
+	jitter := (rand.Float64() - 0.5) * 2 * jitterRange
+
+	// Apply jitter, ensure positive result
+	result := time.Duration(float64(duration) + jitter)
+	if result <= 0 {
+		result = duration / 2 // Fallback to half duration if negative
+	}
+
+	return result
 }
 
 // fetchRates fetches rates from external API using your source code logic

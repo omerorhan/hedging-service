@@ -141,3 +141,12 @@ func (mc *MemoryCache) GetTerms(agencyId int) (*AgencyPaymentTerm, string, strin
 
 	return &term, bpddName, freqName, nil
 }
+
+// GetRatesMetadata returns validity and revision information for rates
+func (mc *MemoryCache) GetRatesMetadata() (validUntil time.Time, revision int, hasData bool) {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+
+	hasData = len(mc.rates.pairs) > 0
+	return mc.rates.validUntilUTC, mc.rates.rev, hasData
+}
