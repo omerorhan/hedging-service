@@ -1,6 +1,8 @@
 module github.com/omerorhan/hedging-service
 
-go 1.23.10
+go 1.22.0
+
+toolchain go1.22.12
 
 require github.com/redis/go-redis/v9 v9.12.1
 
