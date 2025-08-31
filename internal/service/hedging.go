@@ -348,27 +348,33 @@ func (hs *HedgingService) GiveMeRate(req GiveMeRateReq) (*GiveMeRateResp, error)
 		return nil, err
 	}
 
-	rate := 1.00 // same
-	rateType := "spot"
+	var rate float64
+	var rateType string
 	var explain string
-	if !strings.EqualFold(req.From, req.To) {
-		// Select tenor
-		ten, err := selectTenor(rateData.Pair.Tenors, dth) // adapt to your struct field name (Tenors vs tenors)
-		if err != nil {
-			return nil, err
-		}
 
-		if rateData.Pair.Spot != nil && (ten.Rate == 0 || ten.Days == 0) {
-			rate = *rateData.Pair.Spot
-			rateType = "spot"
-		} else {
-			rate = ten.Rate
-			rateType = "hedged"
-		}
-
-		explain = fmt.Sprintf("%s => Base=%s; Lead=%dd + DaysDue(%d) => DaysToHedge=%d; tenor=%dd",
-			ddExplain, baseSrc, lead, dd, dth, ten.Days)
+	if strings.EqualFold(req.From, req.To) {
+		return nil, fmt.Errorf("from and to are same")
 	}
+
+	// Select tenor
+	ten, _ := selectTenor(rateData.Pair.Tenors, dth) // no need to check error, if tenor not found it should use spot as fallback
+
+	if ten.Rate != 0 {
+		rate = ten.Rate
+		rateType = Hedged
+	}
+
+	if rateData.Pair.Spot != nil && (ten.Rate == 0 || ten.Days == 0) {
+		rate = *rateData.Pair.Spot
+		rateType = Spot
+	}
+
+	if rateData.Pair.Spot == nil {
+		return nil, fmt.Errorf("no tenor, no spot found from: %s, to: %s", req.From, req.To)
+	}
+
+	explain = fmt.Sprintf("%s => Base=%s; Lead=%dd + DaysDue(%d) => DaysToHedge=%d; tenor=%dd",
+		ddExplain, baseSrc, lead, dd, dth, ten.Days)
 
 	// Use validUntil and revisionNumber from the single call
 	validUntil := rateData.ValidUntil

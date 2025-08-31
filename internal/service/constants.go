@@ -17,6 +17,8 @@ const Weekly = "Weekly"
 const BiWeekly = "BiWeekly"
 const Daily = "Daily"
 const SpecificDaysOfWeek = "SpecificDaysOfWeek"
+const Spot = "Spot"
+const Hedged = "Hedged"
 
 // Data structures from your source code for API responses
 // Use types from storage package for consistency

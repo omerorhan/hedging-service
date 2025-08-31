@@ -31,7 +31,7 @@ func main() {
 
 	req := hedging.GiveMeRateReq{
 		AgencyId:             22,
-		From:                 "AED",
+		From:                 "TRY",
 		To:                   "EUR",
 		Nonrefundable:        true,
 		CheckIn:              "2025-09-02",
