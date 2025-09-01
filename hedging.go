@@ -33,6 +33,12 @@ func (c *Client) GiveMeRate(req GiveMeRateReq) (*GiveMeRateResp, error) {
 	return c.service.GiveMeRate(req)
 }
 
+// GetLatestRevision returns revision info
+func (c *Client) GetLatestRevision() (*RevisionInfo, error) {
+	// Both request and response types are aliased, so no conversion needed
+	return c.service.GetLatestRevision()
+}
+
 // Stop gracefully shuts down the service
 func (c *Client) Stop() error {
 	c.service.Stop()
@@ -57,6 +63,8 @@ type GiveMeRateReq = storage.GiveMeRateReq
 
 // GiveMeRateResp is the clean API response type (alias to internal type)
 type GiveMeRateResp = storage.GiveMeRateResp
+
+type RevisionInfo = storage.RevisionInfo
 
 // Advanced types (for advanced users who need internal types)
 type (
