@@ -109,14 +109,14 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 
 	if ddm.isLeader {
 		// Try to renew leadership
-		acquired, err := ddm.redisCache.AcquireLeaderLock(ddm.podID, ddm.lockTTL)
+		renewed, err := ddm.redisCache.RenewLeadership(ddm.podID, ddm.lockTTL)
 		if err != nil {
 			ddm.log("⚠️ Failed to renew leadership: %v", err)
 			ddm.isLeader = false
 			return
 		}
 
-		if !acquired {
+		if !renewed {
 			ddm.log("👑 Leadership lost, becoming follower")
 			ddm.isLeader = false
 		}

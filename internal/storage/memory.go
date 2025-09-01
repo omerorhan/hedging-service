@@ -165,11 +165,15 @@ func (mc *MemoryCache) GetTermsLastRefresh() time.Time {
 	return mc.paymentTerms.lastRefreshed
 }
 
-// // Leader election methods (stub implementations for memory cache)
-// func (mc *MemoryCache) AcquireLeaderLock(podID string, ttl time.Duration) (bool, error) {
-// 	return false, fmt.Errorf("leader election not supported in memory cache")
-// }
-//
-// func (mc *MemoryCache) ReleaseLeaderLock(podID string) error {
-// 	return fmt.Errorf("leader election not supported in memory cache")
-// }
+// Leader election methods (stub implementations for memory cache)
+func (mc *MemoryCache) AcquireLeaderLock(podID string, ttl time.Duration) (bool, error) {
+	return false, fmt.Errorf("leader election not supported in memory cache")
+}
+
+func (mc *MemoryCache) RenewLeadership(podID string, ttl time.Duration) (bool, error) {
+	return false, fmt.Errorf("leader election not supported in memory cache")
+}
+
+func (mc *MemoryCache) ReleaseLeaderLock(podID string) error {
+	return fmt.Errorf("leader election not supported in memory cache")
+}

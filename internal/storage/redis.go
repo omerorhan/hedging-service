@@ -175,6 +175,17 @@ func (rc *RedisCache) AcquireLeaderLock(podID string, ttl time.Duration) (bool, 
 	return result.Val(), nil
 }
 
+func (rc *RedisCache) RenewLeadership(podID string, ttl time.Duration) (bool, error) {
+	// Use SET with XX (only if exists) and EX (expiration) to renew leadership
+	// This only succeeds if the key exists and we're the current leader
+
+	result := rc.client.SetXX(rc.ctx, leaderLockKey, podID, ttl)
+	if result.Err() != nil {
+		return false, fmt.Errorf("failed to renew leadership: %w", result.Err())
+	}
+	return result.Val(), nil
+}
+
 func (rc *RedisCache) ReleaseLeaderLock(podID string) error {
 	// Only release if we're the current leader
 	currentLeader, err := rc.client.Get(rc.ctx, leaderLockKey).Result()

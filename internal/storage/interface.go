@@ -17,6 +17,7 @@ type Cache interface {
 
 	// Leader election methods
 	AcquireLeaderLock(podID string, ttl time.Duration) (bool, error)
+	RenewLeadership(podID string, ttl time.Duration) (bool, error)
 	ReleaseLeaderLock(podID string) error
 
 	Close() error
