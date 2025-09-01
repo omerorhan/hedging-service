@@ -29,3 +29,4 @@ type HedgedPair = storage.HedgedPair
 type SpotPair = storage.SpotPair
 type GiveMeRateReq = storage.GiveMeRateReq
 type GiveMeRateResp = storage.GiveMeRateResp
+type RevisionInfo = storage.RevisionInfo

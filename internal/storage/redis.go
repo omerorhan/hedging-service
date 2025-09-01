@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -136,6 +137,58 @@ func (rc *RedisCache) GetTermsBackup() (*TermsCacheData, error) {
 	}
 
 	return &terms, nil
+}
+
+// Data versioning methods
+func (rc *RedisCache) SetDataVersion(version *DataVersion) error {
+	data, err := json.Marshal(version)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data version: %w", err)
+	}
+	return rc.client.Set(rc.ctx, dataVersionKey, data, rc.opts.DefaultTTL).Err()
+}
+
+func (rc *RedisCache) GetDataVersion() (*DataVersion, error) {
+	data, err := rc.client.Get(rc.ctx, dataVersionKey).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil // No version found
+		}
+		return nil, fmt.Errorf("failed to get data version: %w", err)
+	}
+
+	var version DataVersion
+	if err := json.Unmarshal(data, &version); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal data version: %w", err)
+	}
+
+	return &version, nil
+}
+
+// Leader election methods
+func (rc *RedisCache) AcquireLeaderLock(podID string, ttl time.Duration) (bool, error) {
+	// Use SET with NX (only if not exists) and EX (expiration) for atomic leader election
+	result := rc.client.SetNX(rc.ctx, leaderLockKey, podID, ttl)
+	if result.Err() != nil {
+		return false, fmt.Errorf("failed to acquire leader lock: %w", result.Err())
+	}
+	return result.Val(), nil
+}
+
+func (rc *RedisCache) ReleaseLeaderLock(podID string) error {
+	// Only release if we're the current leader
+	currentLeader, err := rc.client.Get(rc.ctx, leaderLockKey).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil // No leader to release
+		}
+		return fmt.Errorf("failed to check current leader: %w", err)
+	}
+
+	if currentLeader == podID {
+		return rc.client.Del(rc.ctx, leaderLockKey).Err()
+	}
+	return nil
 }
 
 func (rc *RedisCache) Close() error {

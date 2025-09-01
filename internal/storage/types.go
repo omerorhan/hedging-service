@@ -99,3 +99,20 @@ type EnumMap struct {
 	Id   int    `json:"id"`
 	Name string `json:"name"`
 }
+
+// DataVersion tracks the version of data in Redis for change detection
+type DataVersion struct {
+	RatesRevision int       `json:"rates_revision"`
+	LastUpdated   time.Time `json:"last_updated"`
+	LastUpdatedBy string    `json:"last_updated_by"` // Pod ID that last updated
+}
+
+// RevisionInfo provides comprehensive revision metadata for monitoring and health checks
+type RevisionInfo struct {
+	Revision         int           `json:"revision"`         // Current revision number
+	ValidUntil       time.Time     `json:"validUntil"`       // When the data expires
+	RatesLastRefresh time.Time     `json:"ratesLastRefresh"` // When rates were last refreshed
+	TermsLastRefresh time.Time     `json:"termsLastRefresh"` // When terms were last refreshed
+	IsValid          bool          `json:"isValid"`          // Whether the data is currently valid
+	TimeUntilExpiry  time.Duration `json:"timeUntilExpiry"`  // How long until data expires
+}

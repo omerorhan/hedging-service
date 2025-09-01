@@ -10,6 +10,15 @@ type Cache interface {
 	GetRatesBackup() (*RatesEnvelope, error)
 	SetTermsBackup(terms *TermsCacheData) error
 	GetTermsBackup() (*TermsCacheData, error)
+
+	// Data versioning methods
+	SetDataVersion(version *DataVersion) error
+	GetDataVersion() (*DataVersion, error)
+
+	// Leader election methods
+	AcquireLeaderLock(podID string, ttl time.Duration) (bool, error)
+	ReleaseLeaderLock(podID string) error
+
 	Close() error
 }
 

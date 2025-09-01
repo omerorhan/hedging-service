@@ -150,3 +150,26 @@ func (mc *MemoryCache) GetRatesMetadata() (validUntil time.Time, revision int, h
 	hasData = len(mc.rates.pairs) > 0
 	return mc.rates.validUntilUTC, mc.rates.rev, hasData
 }
+
+// GetRatesLastRefresh returns the last refresh time for rates
+func (mc *MemoryCache) GetRatesLastRefresh() time.Time {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+	return mc.rates.lastRefreshed
+}
+
+// GetTermsLastRefresh returns the last refresh time for terms
+func (mc *MemoryCache) GetTermsLastRefresh() time.Time {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+	return mc.paymentTerms.lastRefreshed
+}
+
+// // Leader election methods (stub implementations for memory cache)
+// func (mc *MemoryCache) AcquireLeaderLock(podID string, ttl time.Duration) (bool, error) {
+// 	return false, fmt.Errorf("leader election not supported in memory cache")
+// }
+//
+// func (mc *MemoryCache) ReleaseLeaderLock(podID string) error {
+// 	return fmt.Errorf("leader election not supported in memory cache")
+// }
