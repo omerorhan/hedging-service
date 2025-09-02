@@ -169,7 +169,11 @@ func (hs *HedgingService) Initialize() error {
 }
 
 func (hs *HedgingService) GiveMeRate(req GiveMeRateReq) (*GiveMeRateResp, error) {
-	if !hs.initialized {
+	hs.mu.RLock()
+	initialized := hs.initialized
+	hs.mu.RUnlock()
+
+	if !initialized {
 		return nil, fmt.Errorf("service not initialized - call Initialize() first")
 	}
 
@@ -268,7 +272,11 @@ func (hs *HedgingService) IsLeader() bool {
 
 // GetLatestRevision returns the current revision number and validity information
 func (hs *HedgingService) GetLatestRevision() (*RevisionInfo, error) {
-	if !hs.initialized {
+	hs.mu.RLock()
+	initialized := hs.initialized
+	hs.mu.RUnlock()
+
+	if !initialized {
 		return nil, fmt.Errorf("service not initialized - call Initialize() first")
 	}
 

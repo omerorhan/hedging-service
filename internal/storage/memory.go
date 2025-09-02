@@ -48,6 +48,12 @@ func (mc *MemoryCache) DumpTerms(terms *TermsCacheData) error {
 	if terms == nil {
 		return nil
 	}
+
+	// FASTEST APPROACH: Direct assignment without defensive copying
+	// This is safe because:
+	// 1. TermsCacheData is created fresh in refreshTermsFromAPI()
+	// 2. No concurrent access to the input terms parameter
+	// 3. We hold the lock during the entire operation
 	mc.mu.Lock()
 	mc.paymentTerms.byAgency = terms.ByAgency
 	mc.paymentTerms.bpddNames = terms.BpddNames

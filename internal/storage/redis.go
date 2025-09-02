@@ -176,29 +176,41 @@ func (rc *RedisCache) AcquireLeaderLock(podID string, ttl time.Duration) (bool, 
 }
 
 func (rc *RedisCache) RenewLeadership(podID string, ttl time.Duration) (bool, error) {
-	// Use SET with XX (only if exists) and EX (expiration) to renew leadership
-	// This only succeeds if the key exists and we're the current leader
+	// Use Lua script to atomically check and renew leadership
+	// This ensures we only renew if we're the current leader
+	script := `
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
+		else
+			return false
+		end
+	`
 
-	result := rc.client.SetXX(rc.ctx, leaderLockKey, podID, ttl)
+	result := rc.client.Eval(rc.ctx, script, []string{leaderLockKey}, podID, int(ttl.Seconds()))
 	if result.Err() != nil {
 		return false, fmt.Errorf("failed to renew leadership: %w", result.Err())
 	}
-	return result.Val(), nil
+
+	// Eval returns "OK" on success, false on failure
+	return result.Val() == "OK", nil
 }
 
 func (rc *RedisCache) ReleaseLeaderLock(podID string) error {
-	// Only release if we're the current leader
-	currentLeader, err := rc.client.Get(rc.ctx, leaderLockKey).Result()
-	if err != nil {
-		if err == redis.Nil {
-			return nil // No leader to release
-		}
-		return fmt.Errorf("failed to check current leader: %w", err)
+	// Use Lua script to atomically check and release leadership
+	// This ensures we only release if we're the current leader
+	script := `
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		else
+			return 0
+		end
+	`
+
+	result := rc.client.Eval(rc.ctx, script, []string{leaderLockKey}, podID)
+	if result.Err() != nil {
+		return fmt.Errorf("failed to release leadership: %w", result.Err())
 	}
 
-	if currentLeader == podID {
-		return rc.client.Del(rc.ctx, leaderLockKey).Err()
-	}
 	return nil
 }
 

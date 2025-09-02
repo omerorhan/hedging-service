@@ -24,6 +24,8 @@ type DistributedDataManager struct {
 	termsRefreshInterval time.Duration
 	lockTTL              time.Duration
 	opts                 *ServiceOptions
+	started              bool
+	startMu              sync.Mutex
 }
 
 // NewDistributedDataManager creates a new distributed data manager
@@ -60,12 +62,20 @@ func NewDistributedDataManager(redisCache storage.Cache, memCache *storage.Memor
 
 // Start begins the distributed data management
 func (ddm *DistributedDataManager) Start() error {
+	ddm.startMu.Lock()
+	defer ddm.startMu.Unlock()
+
+	if ddm.started {
+		return fmt.Errorf("distributed data manager already started")
+	}
+
 	ddm.log("🚀 Starting Distributed Data Manager (Pod ID: %s)", ddm.podID)
 
 	// Start the main loop
 	ddm.wg.Add(1)
 	go ddm.mainLoop()
 
+	ddm.started = true
 	ddm.log("✅ Distributed Data Manager started")
 	return nil
 }
@@ -77,8 +87,12 @@ func (ddm *DistributedDataManager) Stop() {
 	ddm.cancel()
 	ddm.wg.Wait()
 
-	// Release leadership if we're the leader
-	if ddm.isLeader {
+	// Release leadership if we're the leader (with proper locking)
+	ddm.mu.Lock()
+	wasLeader := ddm.isLeader
+	ddm.mu.Unlock()
+
+	if wasLeader {
 		ddm.releaseLeadership()
 	}
 
