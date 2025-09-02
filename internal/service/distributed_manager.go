@@ -12,17 +12,18 @@ import (
 
 // DistributedDataManager handles distributed data updates across multiple pods
 type DistributedDataManager struct {
-	redisCache      storage.Cache
-	memCache        *storage.MemoryCache
-	podID           string
-	isLeader        bool
-	mu              sync.RWMutex
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
-	refreshInterval time.Duration
-	lockTTL         time.Duration
-	opts            *ServiceOptions
+	redisCache           storage.Cache
+	memCache             *storage.MemoryCache
+	podID                string
+	isLeader             bool
+	mu                   sync.RWMutex
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	wg                   sync.WaitGroup
+	ratesRefreshInterval time.Duration
+	termsRefreshInterval time.Duration
+	lockTTL              time.Duration
+	opts                 *ServiceOptions
 }
 
 // NewDistributedDataManager creates a new distributed data manager
@@ -33,15 +34,27 @@ func NewDistributedDataManager(redisCache storage.Cache, memCache *storage.Memor
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Set default intervals if not specified
+	ratesInterval := opts.RatesRefreshInterval
+	if ratesInterval == 0 {
+		ratesInterval = 5 * time.Minute // Default 5 minutes for rates
+	}
+
+	termsInterval := opts.TermsRefreshInterval
+	if termsInterval == 0 {
+		termsInterval = 30 * time.Minute // Default 30 minutes for terms (longer period)
+	}
+
 	return &DistributedDataManager{
-		redisCache:      redisCache,
-		memCache:        memCache,
-		podID:           podID,
-		refreshInterval: 5 * time.Minute, // 5 minutes as requested
-		lockTTL:         2 * time.Minute, // Lock expires in 2 minutes
-		opts:            opts,
-		ctx:             ctx,
-		cancel:          cancel,
+		redisCache:           redisCache,
+		memCache:             memCache,
+		podID:                podID,
+		ratesRefreshInterval: ratesInterval,
+		termsRefreshInterval: termsInterval,
+		lockTTL:              2 * time.Minute, // Lock expires in 2 minutes
+		opts:                 opts,
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 }
 
@@ -143,20 +156,42 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 func (ddm *DistributedDataManager) leaderDataRefreshLoop() {
 	defer ddm.wg.Done()
 
-	ticker := time.NewTicker(ddm.refreshInterval)
-	defer ticker.Stop()
+	// Create separate tickers for rates and terms
+	ratesTicker := time.NewTicker(ddm.ratesRefreshInterval)
+	defer ratesTicker.Stop()
 
-	// Initial refresh
+	termsTicker := time.NewTicker(ddm.termsRefreshInterval)
+	defer termsTicker.Stop()
+
+	// Initial refresh of both
 	ddm.refreshDataFromAPIs()
 
 	for {
 		select {
 		case <-ddm.ctx.Done():
 			return
-		case <-ticker.C:
-			// Check if we're still the leader before refreshing
+		case <-ratesTicker.C:
+			// Check if we're still the leader before refreshing rates
 			if ddm.IsLeader() {
-				ddm.refreshDataFromAPIs()
+				ddm.log("🔄 Time to refresh rates (every %v)", ddm.ratesRefreshInterval)
+				if err := ddm.refreshRatesFromAPI(); err != nil {
+					ddm.log("❌ Failed to refresh rates: %v", err)
+				} else {
+					ddm.log("✅ Rates refreshed successfully")
+				}
+			} else {
+				ddm.log("👑 No longer leader, stopping data refresh")
+				return
+			}
+		case <-termsTicker.C:
+			// Check if we're still the leader before refreshing terms
+			if ddm.IsLeader() {
+				ddm.log("🔄 Time to refresh terms (every %v)", ddm.termsRefreshInterval)
+				if err := ddm.refreshTermsFromAPI(); err != nil {
+					ddm.log("❌ Failed to refresh payment terms: %v", err)
+				} else {
+					ddm.log("✅ Payment terms refreshed successfully")
+				}
 			} else {
 				ddm.log("👑 No longer leader, stopping data refresh")
 				return
