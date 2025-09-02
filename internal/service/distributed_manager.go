@@ -85,7 +85,20 @@ func (ddm *DistributedDataManager) Stop() {
 	ddm.log("🛑 Stopping Distributed Data Manager...")
 
 	ddm.cancel()
-	ddm.wg.Wait()
+
+	// Wait for goroutines with timeout to prevent infinite blocking
+	done := make(chan struct{})
+	go func() {
+		ddm.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		ddm.log("✅ All goroutines stopped gracefully")
+	case <-time.After(10 * time.Second):
+		ddm.log("⚠️ Timeout waiting for goroutines to stop")
+	}
 
 	// Release leadership if we're the leader (with proper locking)
 	ddm.mu.Lock()

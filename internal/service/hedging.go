@@ -57,6 +57,7 @@ type ServiceOptions struct {
 	RatesBasicAuth        string        `json:"ratesBasicAuth"`
 	PaymentTermsBaseUrl   string        `json:"paymentTermsBaseUrl"`
 	PaymentTermsBasicAuth string        `json:"paymentTermsBasicAuth"`
+	HTTPTimeout           time.Duration `json:"httpTimeout"`
 }
 
 // DefaultServiceOptions returns sensible default options
@@ -65,6 +66,7 @@ func DefaultServiceOptions() *ServiceOptions {
 		RedisAddr:          "tcp://localhost:6379",
 		InitialLoadTimeout: 30 * time.Second,
 		EnableLogging:      true,
+		HTTPTimeout:        30 * time.Second, // Default 30 second timeout
 	}
 }
 
@@ -144,6 +146,13 @@ func WithTermsRefreshInterval(interval time.Duration) ServiceOption {
 func WithLogging(enabled bool) ServiceOption {
 	return func(opts *ServiceOptions) {
 		opts.EnableLogging = enabled
+	}
+}
+
+// WithHTTPTimeout sets HTTP timeout for external API calls
+func WithHTTPTimeout(timeout time.Duration) ServiceOption {
+	return func(opts *ServiceOptions) {
+		opts.HTTPTimeout = timeout
 	}
 }
 
@@ -316,8 +325,21 @@ func (hs *HedgingService) Stop() {
 		hs.distributedManager.Stop()
 	}
 
-	hs.cancel()  // Signal all goroutines to stop
-	hs.wg.Wait() // Wait for all goroutines to finish
+	hs.cancel() // Signal all goroutines to stop
+
+	// Wait for goroutines with timeout to prevent infinite blocking
+	done := make(chan struct{})
+	go func() {
+		hs.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		hs.log("✅ All goroutines stopped gracefully")
+	case <-time.After(10 * time.Second):
+		hs.log("⚠️ Timeout waiting for goroutines to stop")
+	}
 
 	// Close caches
 	hs.redisCache.Close()
@@ -334,46 +356,68 @@ func (hs *HedgingService) log(format string, args ...interface{}) {
 
 // fetchRates fetches rates from external API using your source code logic
 func (hs *HedgingService) fetchRates(ctx context.Context) (*RatesEnvelope, error) {
+	// Create context with timeout to prevent hanging
+	timeout := hs.opts.HTTPTimeout
+	if timeout == 0 {
+		timeout = 30 * time.Second // Fallback timeout
+	}
+
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	url := hs.opts.RatesBaseUrl + "/api/v1/mna/exchange_rate_service/get_rates"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, _ := http.NewRequestWithContext(ctxWithTimeout, http.MethodGet, url, nil)
 	if user, pass, ok := parseBasicAuthPair(hs.opts.RatesBasicAuth); ok {
 		req.SetBasicAuth(user, pass)
 	}
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("rates API call failed: %w", err)
 	}
 	defer resp.Body.Close()
+
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("rates http %d: %s", resp.StatusCode, string(b))
 	}
 	var env RatesEnvelope
 	if err := json.Unmarshal(b, &env); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse rates response: %w", err)
 	}
 	return &env, nil
 }
 
 // fetchPaymentTerms fetches payment terms from external API using your source code logic
 func (hs *HedgingService) fetchPaymentTerms(ctx context.Context) (*PaymentTermsEnvelope, error) {
+	// Create context with timeout to prevent hanging
+	timeout := hs.opts.HTTPTimeout
+	if timeout == 0 {
+		timeout = 30 * time.Second // Fallback timeout
+	}
+
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	url := hs.opts.PaymentTermsBaseUrl + "/api/v1/agency/payment_terms/get"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, _ := http.NewRequestWithContext(ctxWithTimeout, http.MethodGet, url, nil)
 	if user, pass, ok := parseBasicAuthPair(hs.opts.PaymentTermsBasicAuth); ok {
 		req.SetBasicAuth(user, pass)
 	}
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("payment terms API call failed: %w", err)
 	}
 	defer resp.Body.Close()
+
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("terms http %d: %s", resp.StatusCode, string(b))
 	}
 	var env PaymentTermsEnvelope
 	if err := json.Unmarshal(b, &env); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse payment terms response: %w", err)
 	}
 	return &env, nil
 }
