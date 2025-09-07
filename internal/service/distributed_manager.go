@@ -141,6 +141,11 @@ func (ddm *DistributedDataManager) GetPodID() string {
 
 // shouldRefreshRates checks if rates need refreshing based on ValidUntil date
 func (ddm *DistributedDataManager) shouldRefreshRates() bool {
+	if ddm.memCache == nil {
+		ddm.log("📝 Memory cache not available, need to refresh")
+		return true
+	}
+
 	validUntil, _, hasData := ddm.memCache.GetRatesMetadata()
 	if !hasData {
 		ddm.log("📝 No rates data found, need to refresh")
@@ -166,6 +171,11 @@ func (ddm *DistributedDataManager) shouldRefreshRates() bool {
 
 // shouldRefreshTerms checks if terms need refreshing based on last refresh time
 func (ddm *DistributedDataManager) shouldRefreshTerms() bool {
+	if ddm.memCache == nil {
+		ddm.log("📝 Memory cache not available, need to refresh")
+		return true
+	}
+
 	lastRefresh := ddm.memCache.GetTermsLastRefresh()
 	if lastRefresh.IsZero() {
 		ddm.log("📝 No terms data found, need to refresh")
@@ -185,6 +195,11 @@ func (ddm *DistributedDataManager) shouldRefreshTerms() bool {
 
 // calculateNextRatesRefresh calculates when to refresh rates based on ValidUntil date
 func (ddm *DistributedDataManager) calculateNextRatesRefresh() time.Time {
+	if ddm.memCache == nil {
+		// No memory cache available, refresh after a short delay
+		return time.Now().UTC().Add(30 * time.Second)
+	}
+
 	validUntil, _, hasData := ddm.memCache.GetRatesMetadata()
 	if !hasData {
 		// No data yet, refresh after a short delay to avoid infinite loops
@@ -209,6 +224,11 @@ func (ddm *DistributedDataManager) calculateNextRatesRefresh() time.Time {
 
 // calculateNextTermsRefresh calculates when to refresh terms based on last refresh time
 func (ddm *DistributedDataManager) calculateNextTermsRefresh() time.Time {
+	if ddm.memCache == nil {
+		// No memory cache available, refresh after a short delay
+		return time.Now().UTC().Add(30 * time.Second)
+	}
+
 	lastRefresh := ddm.memCache.GetTermsLastRefresh()
 	if lastRefresh.IsZero() {
 		// No terms data yet, refresh after a short delay to avoid infinite loops
@@ -273,7 +293,7 @@ func (ddm *DistributedDataManager) getNextRefreshTime() time.Time {
 func (ddm *DistributedDataManager) mainLoop() {
 	defer ddm.wg.Done()
 
-	// Leader election ticker - check every 30 seconds
+	// Leader election ticker - check every 20 seconds
 	leaderTicker := time.NewTicker(20 * time.Second)
 	defer leaderTicker.Stop()
 
@@ -413,6 +433,10 @@ func (ddm *DistributedDataManager) leaderDataRefreshLoop() {
 
 // refreshRatesFromAPI fetches rates from external API
 func (ddm *DistributedDataManager) refreshRatesFromAPI() error {
+	if ddm.redisCache == nil || ddm.memCache == nil || ddm.opts == nil {
+		return fmt.Errorf("required dependencies not available")
+	}
+
 	// Create a temporary hedging service to use existing fetch logic
 	tempService := &HedgingService{
 		redisCache: ddm.redisCache,
@@ -459,6 +483,10 @@ func (ddm *DistributedDataManager) refreshRatesFromAPI() error {
 
 // refreshTermsFromAPI fetches payment terms from external API
 func (ddm *DistributedDataManager) refreshTermsFromAPI() error {
+	if ddm.redisCache == nil || ddm.memCache == nil || ddm.opts == nil {
+		return fmt.Errorf("required dependencies not available")
+	}
+
 	// Create a temporary hedging service to use existing fetch logic
 	tempService := &HedgingService{
 		redisCache: ddm.redisCache,
@@ -515,6 +543,10 @@ func (ddm *DistributedDataManager) refreshTermsFromAPI() error {
 // getDataVersionInfo retrieves and compares data versions between Redis and local cache
 // Returns: (needsRatesSync, needsTermsSync, currentVersion, localRevision, error)
 func (ddm *DistributedDataManager) getDataVersionInfo() (bool, *storage.DataVersion, int, error) {
+	if ddm.redisCache == nil || ddm.memCache == nil {
+		return false, nil, 0, fmt.Errorf("required dependencies not available")
+	}
+
 	// Get current data version from Redis
 	currentVersion, err := ddm.redisCache.GetDataVersion()
 	if err != nil {
@@ -584,6 +616,11 @@ func (ddm *DistributedDataManager) syncFromRedis() {
 
 // syncRatesFromRedis syncs rates data from Redis to local memory cache
 func (ddm *DistributedDataManager) syncRatesFromRedis() {
+	if ddm.redisCache == nil || ddm.memCache == nil {
+		ddm.log("⚠️ Required dependencies not available for sync")
+		return
+	}
+
 	envelope, err := ddm.redisCache.GetRatesBackup()
 	if err != nil {
 		ddm.log("⚠️ Failed to get rates from Redis for sync: %v", err)
@@ -605,6 +642,11 @@ func (ddm *DistributedDataManager) syncRatesFromRedis() {
 
 // syncTermsFromRedis syncs payment terms data from Redis to local memory cache
 func (ddm *DistributedDataManager) syncTermsFromRedis() {
+	if ddm.redisCache == nil || ddm.memCache == nil {
+		ddm.log("⚠️ Required dependencies not available for sync")
+		return
+	}
+
 	termsData, err := ddm.redisCache.GetTermsBackup()
 	if err != nil {
 		ddm.log("⚠️ Failed to get terms from Redis for sync: %v", err)
@@ -632,6 +674,8 @@ func (ddm *DistributedDataManager) createLeaderContext() {
 	// Cancel any existing leader context
 	if ddm.leaderCancel != nil {
 		ddm.leaderCancel()
+		ddm.leaderCancel = nil
+		ddm.leaderCtx = nil
 	}
 
 	// Create new leader context

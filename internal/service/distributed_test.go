@@ -329,6 +329,9 @@ func TestDistributedDataManager_RealDataSync(t *testing.T) {
 	}
 	defer cleanup()
 
+	// Clean up any existing test data before starting
+	cleanup()
+
 	// Create two distributed managers to simulate leader and follower pods
 	memCache1 := storage.NewMemoryCache()
 	memCache2 := storage.NewMemoryCache()
@@ -338,18 +341,22 @@ func TestDistributedDataManager_RealDataSync(t *testing.T) {
 	manager1 := NewDistributedDataManager(redisCache, memCache1, opts)
 	manager2 := NewDistributedDataManager(redisCache, memCache2, opts)
 
-	// Start both managers
+	// Start first manager
 	if err := manager1.Start(); err != nil {
 		t.Fatalf("Failed to start manager1: %v", err)
 	}
 	defer manager1.Stop()
 
+	// Small delay to ensure manager1 has time to become leader
+	time.Sleep(500 * time.Millisecond)
+
+	// Start second manager
 	if err := manager2.Start(); err != nil {
 		t.Fatalf("Failed to start manager2: %v", err)
 	}
 	defer manager2.Stop()
 
-	// Wait for leader election
+	// Wait for leader election to complete
 	time.Sleep(2 * time.Second)
 
 	// Determine which is leader and which is follower
@@ -543,8 +550,9 @@ func TestDistributedDataManager_DynamicRefresh(t *testing.T) {
 	// Test calculateNextRatesRefresh with no data
 	nextRefresh := manager.calculateNextRatesRefresh()
 	now := time.Now().UTC()
-	if nextRefresh.After(now.Add(1 * time.Second)) {
-		t.Error("Expected immediate refresh when no data exists")
+	// When no data exists, we return 30 seconds in the future to prevent infinite loops
+	if nextRefresh.Before(now) || nextRefresh.After(now.Add(1*time.Minute)) {
+		t.Errorf("Expected refresh in ~30 seconds when no data exists, got %v (now: %v)", nextRefresh, now)
 	}
 
 	// Test with mock data that expires in 1 hour
@@ -609,8 +617,9 @@ func TestDistributedDataManager_DynamicRefresh(t *testing.T) {
 	// Test calculateNextRatesRefresh with expired data
 	nextRefresh = manager.calculateNextRatesRefresh()
 	now = time.Now().UTC()
-	if nextRefresh.After(now.Add(1 * time.Second)) {
-		t.Error("Expected immediate refresh when data has expired")
+	// When data has expired, we return 30 seconds in the future to prevent infinite loops
+	if nextRefresh.Before(now) || nextRefresh.After(now.Add(1*time.Minute)) {
+		t.Errorf("Expected refresh in ~30 seconds when data has expired, got %v (now: %v)", nextRefresh, now)
 	}
 
 	// Test updateNextRefreshTimes

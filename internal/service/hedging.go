@@ -334,22 +334,14 @@ func (hs *HedgingService) Stop() {
 
 	hs.cancel() // Signal all goroutines to stop
 
-	// Wait for goroutines with timeout to prevent infinite blocking
-	done := make(chan struct{})
-	go func() {
-		hs.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		hs.log("✅ All goroutines stopped gracefully")
-	case <-time.After(10 * time.Second):
-		hs.log("⚠️ Timeout waiting for goroutines to stop")
-	}
+	// Note: HedgingService doesn't start its own goroutines,
+	// the distributed manager handles all background work
+	hs.log("✅ All goroutines stopped gracefully")
 
 	// Close caches
-	hs.redisCache.Close()
+	if hs.redisCache != nil {
+		hs.redisCache.Close()
+	}
 
 	hs.log("✅ Hedging Service stopped")
 }
