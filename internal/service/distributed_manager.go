@@ -27,6 +27,10 @@ type DistributedDataManager struct {
 	opts                 *ServiceOptions
 	started              bool
 	startMu              sync.Mutex
+	// Dynamic refresh tracking
+	nextRatesRefresh time.Time
+	nextTermsRefresh time.Time
+	refreshMu        sync.RWMutex
 }
 
 // NewDistributedDataManager creates a new distributed data manager
@@ -45,10 +49,10 @@ func NewDistributedDataManager(redisCache storage.Cache, memCache *storage.Memor
 
 	termsInterval := opts.TermsRefreshInterval
 	if termsInterval == 0 {
-		termsInterval = 30 * time.Minute // Default 30 minutes for terms (longer period)
+		termsInterval = 2 * time.Hour // Default 2 hours for terms (static interval)
 	}
 
-	syncInterval := 5 * time.Second // Default 2 minutes for data sync
+	syncInterval := 5 * time.Second // Default 5 seconds for data sync
 	if opts.SyncInterval != 0 {
 		syncInterval = opts.SyncInterval
 	}
@@ -131,12 +135,68 @@ func (ddm *DistributedDataManager) GetPodID() string {
 	return ddm.podID
 }
 
+// calculateNextRatesRefresh calculates when to refresh rates based on ValidUntil date
+func (ddm *DistributedDataManager) calculateNextRatesRefresh() time.Time {
+	validUntil, _, hasData := ddm.memCache.GetRatesMetadata()
+	if !hasData {
+		// No data yet, refresh immediately
+		return time.Now().UTC()
+	}
+
+	if validUntil.IsZero() {
+		// No ValidUntil date, use fallback interval
+		return time.Now().UTC().Add(ddm.ratesRefreshInterval)
+	}
+
+	// Refresh 15 seconds before data expires
+	nextRefresh := validUntil.Add(-11 * time.Minute)
+
+	// Ensure we don't schedule a refresh in the past
+	if nextRefresh.Before(time.Now().UTC()) {
+		return time.Now().UTC()
+	}
+
+	return nextRefresh
+}
+
+// calculateNextTermsRefresh calculates when to refresh terms based on last refresh time
+func (ddm *DistributedDataManager) calculateNextTermsRefresh() time.Time {
+	lastRefresh := ddm.memCache.GetTermsLastRefresh()
+	if lastRefresh.IsZero() {
+		// No terms data yet, refresh immediately
+		return time.Now().UTC()
+	}
+
+	// Use the configured interval for terms (they don't have ValidUntil)
+	return lastRefresh.Add(ddm.termsRefreshInterval)
+}
+
+// updateNextRefreshTimes updates the next refresh times based on current data
+func (ddm *DistributedDataManager) updateNextRefreshTimes() {
+	ddm.refreshMu.Lock()
+	defer ddm.refreshMu.Unlock()
+
+	ddm.nextRatesRefresh = ddm.calculateNextRatesRefresh()
+	ddm.nextTermsRefresh = ddm.calculateNextTermsRefresh()
+
+	ddm.log("📅 Next rates refresh: %v (ValidUntil - 15s)", ddm.nextRatesRefresh.Format("2006-01-02 15:04:05 UTC"))
+	ddm.log("📅 Next terms refresh: %v (static %v interval)", ddm.nextTermsRefresh.Format("2006-01-02 15:04:05 UTC"), ddm.termsRefreshInterval)
+}
+
+// getNextRefreshTime returns the earliest of the next refresh times
+func (ddm *DistributedDataManager) getNextRefreshTime() time.Time {
+	ddm.refreshMu.RLock()
+	defer ddm.refreshMu.RUnlock()
+
+	return ddm.nextRatesRefresh
+}
+
 // mainLoop is the main loop that handles leader election and data management
 func (ddm *DistributedDataManager) mainLoop() {
 	defer ddm.wg.Done()
 
 	// Leader election ticker - check every 30 seconds
-	leaderTicker := time.NewTicker(30 * time.Second)
+	leaderTicker := time.NewTicker(20 * time.Second)
 	defer leaderTicker.Stop()
 
 	// Data sync ticker - check periodically for non-leader pods
@@ -210,45 +270,66 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 func (ddm *DistributedDataManager) leaderDataRefreshLoop() {
 	defer ddm.wg.Done()
 
-	// Create separate tickers for rates and terms
-	ratesTicker := time.NewTicker(ddm.ratesRefreshInterval)
-	defer ratesTicker.Stop()
-
-	termsTicker := time.NewTicker(ddm.termsRefreshInterval)
-	defer termsTicker.Stop()
-
 	// Initial refresh of both
 	ddm.refreshDataFromAPIs()
 
+	// Update refresh times after initial load
+	ddm.updateNextRefreshTimes()
+
 	for {
-		select {
-		case <-ddm.ctx.Done():
+		// Check if we're still the leader
+		if !ddm.IsLeader() {
+			ddm.log("👑 No longer leader, stopping data refresh")
 			return
-		case <-ratesTicker.C:
-			// Check if we're still the leader before refreshing rates
-			if ddm.IsLeader() {
-				ddm.log("🔄 Time to refresh rates (every %v)", ddm.ratesRefreshInterval)
-				if err := ddm.refreshRatesFromAPI(); err != nil {
-					ddm.log("❌ Failed to refresh rates: %v", err)
-				} else {
-					ddm.log("✅ Rates refreshed successfully")
-				}
-			} else {
-				ddm.log("👑 No longer leader, stopping data refresh")
+		}
+
+		// Update refresh times and get the next refresh time
+		ddm.updateNextRefreshTimes()
+		nextRefresh := ddm.getNextRefreshTime()
+		now := time.Now().UTC()
+
+		// Wait until next refresh time if it's in the future
+		if nextRefresh.After(now) {
+			waitDuration := nextRefresh.Sub(now)
+			ddm.log("⏰ Next refresh in %v (at %v)", waitDuration, nextRefresh.Format("2006-01-02 15:04:05 UTC"))
+
+			// Wait until next refresh time or context cancellation
+			timer := time.NewTimer(waitDuration)
+			select {
+			case <-ddm.ctx.Done():
+				timer.Stop()
 				return
+			case <-timer.C:
+				// Time to refresh - recalculate times and refresh what's needed
+				ddm.updateNextRefreshTimes()
 			}
-		case <-termsTicker.C:
-			// Check if we're still the leader before refreshing terms
-			if ddm.IsLeader() {
-				ddm.log("🔄 Time to refresh terms (every %v)", ddm.termsRefreshInterval)
-				if err := ddm.refreshTermsFromAPI(); err != nil {
-					ddm.log("❌ Failed to refresh payment terms: %v", err)
-				} else {
-					ddm.log("✅ Payment terms refreshed successfully")
-				}
+		}
+
+		// Get current refresh times after waiting/updating
+		ddm.refreshMu.RLock()
+		ratesTime := ddm.nextRatesRefresh
+		termsTime := ddm.nextTermsRefresh
+		ddm.refreshMu.RUnlock()
+
+		now = time.Now().UTC()
+
+		// Refresh rates if it's time (ValidUntil-based)
+		if !ratesTime.After(now) {
+			ddm.log("🔄 Time to refresh rates (ValidUntil-based)")
+			if err := ddm.refreshRatesFromAPI(); err != nil {
+				ddm.log("❌ Failed to refresh rates: %v", err)
 			} else {
-				ddm.log("👑 No longer leader, stopping data refresh")
-				return
+				ddm.log("✅ Rates refreshed successfully")
+			}
+		}
+
+		// Refresh terms if it's time (static interval-based)
+		if !termsTime.After(now) {
+			ddm.log("🔄 Time to refresh terms (static interval-based)")
+			if err := ddm.refreshTermsFromAPI(); err != nil {
+				ddm.log("❌ Failed to refresh payment terms: %v", err)
+			} else {
+				ddm.log("✅ Payment terms refreshed successfully")
 			}
 		}
 	}
@@ -438,8 +519,10 @@ func (ddm *DistributedDataManager) syncFromRedis() {
 	if needsRatesSync {
 		ddm.log("🔄 Syncing rates (Redis: %d, Local: %d)", currentVersion.RatesRevision, localRevision)
 		ddm.syncRatesFromRedis()
-		ddm.syncTermsFromRedis()
 	}
+
+	// Always sync terms since they don't have versioning
+	ddm.syncTermsFromRedis()
 
 	ddm.log("✅ Sync completed")
 }

@@ -520,3 +520,95 @@ func TestDistributedDataManager_RealDataSync(t *testing.T) {
 
 	t.Log("🎉 Real data sync test completed successfully!")
 }
+
+func TestDistributedDataManager_DynamicRefresh(t *testing.T) {
+	redisCache, err := storage.NewRedisCache("tcp://localhost:6379")
+	if err != nil {
+		t.Skipf("Skipping test - Redis not available: %v", err)
+	}
+	defer redisCache.Close()
+
+	// Cleanup function to remove test data from Redis
+	cleanup := func() {
+		redisCache.CleanupTestData()
+	}
+	defer cleanup()
+
+	memCache := storage.NewMemoryCache()
+	opts := DefaultServiceOptions()
+	opts.SyncInterval = 1 * time.Second
+
+	manager := NewDistributedDataManager(redisCache, memCache, opts)
+
+	// Test calculateNextRatesRefresh with no data
+	nextRefresh := manager.calculateNextRatesRefresh()
+	now := time.Now().UTC()
+	if nextRefresh.After(now.Add(1 * time.Second)) {
+		t.Error("Expected immediate refresh when no data exists")
+	}
+
+	// Test with mock data that expires in 1 hour
+	mockRates := &storage.RatesEnvelope{
+		Revision:       100,
+		ValidUntilDate: time.Now().UTC().Add(1 * time.Hour).Format("2006-01-02T15:04:05"),
+		TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+		IsSuccessful:   true,
+		CurrencyCollection: storage.CurrencyCollection{
+			Hedged: []storage.HedgedPair{},
+			Spot:   []storage.SpotPair{},
+		},
+	}
+
+	// Store mock data in memory cache
+	if err := memCache.DumpRates(mockRates); err != nil {
+		t.Fatalf("Failed to store mock rates: %v", err)
+	}
+
+	// Test calculateNextRatesRefresh with data that expires in 1 hour
+	nextRefresh = manager.calculateNextRatesRefresh()
+
+	// The refresh should be in the future (not immediate)
+	now2 := time.Now().UTC()
+	if nextRefresh.Before(now2) {
+		t.Errorf("Expected refresh to be in the future, got %v (now: %v)", nextRefresh, now2)
+	}
+
+	// The refresh should be within a reasonable time range (not too far in the future)
+	if nextRefresh.After(now2.Add(2 * time.Hour)) {
+		t.Errorf("Expected refresh to be within 2 hours, got %v (now: %v)", nextRefresh, now2)
+	}
+
+	// Test with data that has already expired
+	expiredRates := &storage.RatesEnvelope{
+		Revision:       200,
+		ValidUntilDate: time.Now().UTC().Add(-1 * time.Hour).Format("2006-01-02T15:04:05"),
+		TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+		IsSuccessful:   true,
+		CurrencyCollection: storage.CurrencyCollection{
+			Hedged: []storage.HedgedPair{},
+			Spot:   []storage.SpotPair{},
+		},
+	}
+
+	if err := memCache.DumpRates(expiredRates); err != nil {
+		t.Fatalf("Failed to store expired rates: %v", err)
+	}
+
+	// Test calculateNextRatesRefresh with expired data
+	nextRefresh = manager.calculateNextRatesRefresh()
+	now = time.Now().UTC()
+	if nextRefresh.After(now.Add(1 * time.Second)) {
+		t.Error("Expected immediate refresh when data has expired")
+	}
+
+	// Test updateNextRefreshTimes
+	manager.updateNextRefreshTimes()
+
+	// Test getNextRefreshTime
+	nextRefreshTime := manager.getNextRefreshTime()
+	if nextRefreshTime.IsZero() {
+		t.Error("Expected non-zero next refresh time")
+	}
+
+	t.Log("✅ Dynamic refresh logic test completed successfully!")
+}
