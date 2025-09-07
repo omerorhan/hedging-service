@@ -49,6 +49,7 @@ type ServiceOptions struct {
 	RedisAddr             string        `json:"redisAddr"`
 	RatesRefreshInterval  time.Duration `json:"ratesRefreshInterval"`
 	TermsRefreshInterval  time.Duration `json:"termsRefreshInterval"`
+	SyncInterval          time.Duration `json:"syncInterval"`
 	InitialLoadTimeout    time.Duration `json:"initialLoadTimeout"`
 	EnableLogging         bool          `json:"enableLogging"`
 	MaxRetries            int           `json:"maxRetries"`
@@ -139,6 +140,12 @@ func WithRatesRefreshInterval(interval time.Duration) ServiceOption {
 func WithTermsRefreshInterval(interval time.Duration) ServiceOption {
 	return func(opts *ServiceOptions) {
 		opts.TermsRefreshInterval = interval
+	}
+}
+
+func WithSyncInterval(interval time.Duration) ServiceOption {
+	return func(opts *ServiceOptions) {
+		opts.SyncInterval = interval
 	}
 }
 

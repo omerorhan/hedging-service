@@ -10,3 +10,11 @@ const (
 	dataVersionKey = "hedging:data_version"
 	leaderLockKey  = "hedging:leader_lock"
 )
+
+// Exported constants for testing cleanup
+const (
+	RatesBackupKey = ratesBackupKey
+	TermsBackupKey = termsBackupKey
+	DataVersionKey = dataVersionKey
+	LeaderLockKey  = leaderLockKey
+)

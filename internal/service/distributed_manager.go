@@ -22,6 +22,7 @@ type DistributedDataManager struct {
 	wg                   sync.WaitGroup
 	ratesRefreshInterval time.Duration
 	termsRefreshInterval time.Duration
+	syncInterval         time.Duration
 	lockTTL              time.Duration
 	opts                 *ServiceOptions
 	started              bool
@@ -47,12 +48,18 @@ func NewDistributedDataManager(redisCache storage.Cache, memCache *storage.Memor
 		termsInterval = 30 * time.Minute // Default 30 minutes for terms (longer period)
 	}
 
+	syncInterval := 5 * time.Second // Default 2 minutes for data sync
+	if opts.SyncInterval != 0 {
+		syncInterval = opts.SyncInterval
+	}
+
 	return &DistributedDataManager{
 		redisCache:           redisCache,
 		memCache:             memCache,
 		podID:                podID,
 		ratesRefreshInterval: ratesInterval,
 		termsRefreshInterval: termsInterval,
+		syncInterval:         syncInterval,
 		lockTTL:              2 * time.Minute, // Lock expires in 2 minutes
 		opts:                 opts,
 		ctx:                  ctx,
@@ -119,12 +126,22 @@ func (ddm *DistributedDataManager) IsLeader() bool {
 	return ddm.isLeader
 }
 
+// GetPodID returns the pod ID for testing purposes
+func (ddm *DistributedDataManager) GetPodID() string {
+	return ddm.podID
+}
+
 // mainLoop is the main loop that handles leader election and data management
 func (ddm *DistributedDataManager) mainLoop() {
 	defer ddm.wg.Done()
 
-	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
-	defer ticker.Stop()
+	// Leader election ticker - check every 30 seconds
+	leaderTicker := time.NewTicker(30 * time.Second)
+	defer leaderTicker.Stop()
+
+	// Data sync ticker - check periodically for non-leader pods
+	syncTicker := time.NewTicker(ddm.syncInterval)
+	defer syncTicker.Stop()
 
 	// Initial sync from Redis
 	ddm.syncFromRedis()
@@ -136,8 +153,18 @@ func (ddm *DistributedDataManager) mainLoop() {
 		select {
 		case <-ddm.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-leaderTicker.C:
 			ddm.performLeaderElection()
+		case <-syncTicker.C:
+			// Only sync if we're not the leader (leaders update data themselves)
+			if !ddm.IsLeader() {
+				ddm.log("🔄 Non-leader pod checking for data updates...")
+				if ddm.needsDataSync() {
+					ddm.syncFromRedis()
+				} else {
+					ddm.log("📝 Data is up to date, skipping sync")
+				}
+			}
 		}
 	}
 }
@@ -349,14 +376,56 @@ func (ddm *DistributedDataManager) refreshTermsFromAPI() error {
 	return nil
 }
 
+// getDataVersionInfo retrieves and compares data versions between Redis and local cache
+// Returns: (needsRatesSync, needsTermsSync, currentVersion, localRevision, error)
+func (ddm *DistributedDataManager) getDataVersionInfo() (bool, *storage.DataVersion, int, error) {
+	// Get current data version from Redis
+	currentVersion, err := ddm.redisCache.GetDataVersion()
+	if err != nil {
+		ddm.log("⚠️ Failed to get current data version: %v", err)
+		return false, nil, 0, err
+	}
+
+	// Get local data version
+	_, localRevision, hasData := ddm.memCache.GetRatesMetadata()
+	if !hasData {
+		ddm.log("📝 No local data found, full sync needed")
+		return true, currentVersion, 0, nil
+	}
+
+	if currentVersion == nil {
+		ddm.log("📝 No data version found in Redis, but local data exists - no sync needed")
+		return false, nil, localRevision, nil
+	}
+
+	// Check if rates need syncing (only rates have real versions)
+	needsRatesSync := currentVersion.RatesRevision > localRevision
+	// needsTermsSync := true // Always sync terms since they don't have versioning
+
+	if needsRatesSync {
+		ddm.log("🔄 Data sync needed: Redis rates revision %d > local %d", currentVersion.RatesRevision, localRevision)
+	} else {
+		ddm.log("📝 Rates are up to date (Redis: %d, Local: %d)", currentVersion.RatesRevision, localRevision)
+	}
+
+	return needsRatesSync, currentVersion, localRevision, nil
+}
+
+// needsDataSync checks if data needs to be synced from Redis
+func (ddm *DistributedDataManager) needsDataSync() bool {
+	needsRatesSync, _, _, err := ddm.getDataVersionInfo()
+	if err != nil {
+		return false // Don't sync if we can't check version
+	}
+	return needsRatesSync
+}
+
 // syncFromRedis syncs data from Redis to local memory cache
 func (ddm *DistributedDataManager) syncFromRedis() {
 	ddm.log("📥 Syncing data from Redis...")
 
-	// Get current data version
-	currentVersion, err := ddm.redisCache.GetDataVersion()
+	needsRatesSync, currentVersion, localRevision, err := ddm.getDataVersionInfo()
 	if err != nil {
-		ddm.log("⚠️ Failed to get current data version: %v", err)
 		return
 	}
 
@@ -365,24 +434,12 @@ func (ddm *DistributedDataManager) syncFromRedis() {
 		return
 	}
 
-	// Get local data version
-	_, localRevision, hasData := ddm.memCache.GetRatesMetadata()
-	if !hasData {
-		// no data yet so it should pull
-		ddm.syncRatesFromRedis()
-		ddm.syncTermsFromRedis()
-		ddm.log("✅ Initial sync completed")
-		return
-	}
-
-	// Check if we need to sync rates (only rates have real versions)
-	if currentVersion.RatesRevision > localRevision {
+	// Sync rates if needed
+	if needsRatesSync {
 		ddm.log("🔄 Syncing rates (Redis: %d, Local: %d)", currentVersion.RatesRevision, localRevision)
 		ddm.syncRatesFromRedis()
+		ddm.syncTermsFromRedis()
 	}
-
-	// Always sync terms since they don't have real versions
-	ddm.syncTermsFromRedis()
 
 	ddm.log("✅ Sync completed")
 }

@@ -217,3 +217,14 @@ func (rc *RedisCache) ReleaseLeaderLock(podID string) error {
 func (rc *RedisCache) Close() error {
 	return rc.client.Close()
 }
+
+// CleanupTestData removes test-related keys from Redis (for testing only)
+func (rc *RedisCache) CleanupTestData() error {
+	keys := []string{
+		DataVersionKey,
+		LeaderLockKey,
+		RatesBackupKey,
+		TermsBackupKey,
+	}
+	return rc.client.Del(rc.ctx, keys...).Err()
+}
