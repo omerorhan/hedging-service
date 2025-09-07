@@ -555,7 +555,13 @@ func TestDistributedDataManager_DynamicRefresh(t *testing.T) {
 		IsSuccessful:   true,
 		CurrencyCollection: storage.CurrencyCollection{
 			Hedged: []storage.HedgedPair{},
-			Spot:   []storage.SpotPair{},
+			Spot: []storage.SpotPair{
+				{
+					From: "USD",
+					To:   "EUR",
+					Rate: 0.85,
+				},
+			},
 		},
 	}
 
@@ -586,7 +592,13 @@ func TestDistributedDataManager_DynamicRefresh(t *testing.T) {
 		IsSuccessful:   true,
 		CurrencyCollection: storage.CurrencyCollection{
 			Hedged: []storage.HedgedPair{},
-			Spot:   []storage.SpotPair{},
+			Spot: []storage.SpotPair{
+				{
+					From: "USD",
+					To:   "EUR",
+					Rate: 0.85,
+				},
+			},
 		},
 	}
 
@@ -611,4 +623,594 @@ func TestDistributedDataManager_DynamicRefresh(t *testing.T) {
 	}
 
 	t.Log("✅ Dynamic refresh logic test completed successfully!")
+}
+
+// TestDistributedDataManager_SmartRefreshLogic tests the smart refresh logic
+func TestDistributedDataManager_SmartRefreshLogic(t *testing.T) {
+	// Setup Redis cache
+	redisCache, err := storage.NewRedisCache("tcp://localhost:6379/0")
+	if err != nil {
+		t.Skipf("Skipping test - Redis not available: %v", err)
+	}
+	defer redisCache.CleanupTestData()
+
+	// Setup memory cache
+	memCache := storage.NewMemoryCache()
+
+	// Test options
+	opts := &ServiceOptions{
+		EnableLogging: true,
+	}
+
+	// Create distributed manager
+	ddm := NewDistributedDataManager(redisCache, memCache, opts)
+
+	t.Run("shouldRefreshRates with valid data", func(t *testing.T) {
+		// Set up valid data in memory cache (expires in 1 hour)
+		validUntil := time.Now().UTC().Add(1 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := memCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Should NOT refresh (data is valid for 1 hour, 11 minutes buffer)
+		shouldRefresh := ddm.shouldRefreshRates()
+		if shouldRefresh {
+			t.Error("Should not refresh when data is valid")
+		}
+	})
+
+	t.Run("shouldRefreshRates with expired data", func(t *testing.T) {
+		// Set up expired data in memory cache (expired 1 hour ago)
+		validUntil := time.Now().UTC().Add(-1 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := memCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Should refresh (data is expired)
+		shouldRefresh := ddm.shouldRefreshRates()
+		if !shouldRefresh {
+			t.Error("Should refresh when data is expired")
+		}
+	})
+
+	t.Run("shouldRefreshRates with data expiring soon", func(t *testing.T) {
+		// Set up data expiring in 5 minutes (should refresh due to 11-minute buffer)
+		validUntil := time.Now().UTC().Add(5 * time.Minute)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := memCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Should refresh (data expires in 5 minutes, but we refresh 11 minutes before)
+		shouldRefresh := ddm.shouldRefreshRates()
+		if !shouldRefresh {
+			t.Error("Should refresh when data expires soon")
+		}
+	})
+
+	t.Run("shouldRefreshRates with no data", func(t *testing.T) {
+		// Clear memory cache
+		memCache = storage.NewMemoryCache()
+		ddm.memCache = memCache
+
+		// Should refresh (no data)
+		shouldRefresh := ddm.shouldRefreshRates()
+		if !shouldRefresh {
+			t.Error("Should refresh when no data exists")
+		}
+	})
+}
+
+// TestDistributedDataManager_LeaderInitialLoad tests leader initial load behavior
+func TestDistributedDataManager_LeaderInitialLoad(t *testing.T) {
+	// Setup Redis cache
+	redisCache, err := storage.NewRedisCache("tcp://localhost:6379/0")
+	if err != nil {
+		t.Skipf("Skipping test - Redis not available: %v", err)
+	}
+	defer redisCache.CleanupTestData()
+
+	// Setup memory cache
+	memCache := storage.NewMemoryCache()
+
+	// Test options
+	opts := &ServiceOptions{
+		EnableLogging: true,
+	}
+
+	// Create distributed manager
+	ddm := NewDistributedDataManager(redisCache, memCache, opts)
+
+	t.Run("leader initial load with no data", func(t *testing.T) {
+		// No data in memory cache
+		// This should trigger API calls when leader starts
+
+		// We can't easily mock the internal calls, so we'll test the shouldRefresh logic
+		shouldRefreshRates := ddm.shouldRefreshRates()
+		shouldRefreshTerms := ddm.shouldRefreshTerms()
+
+		if !shouldRefreshRates {
+			t.Error("Should refresh rates when no data")
+		}
+		if !shouldRefreshTerms {
+			t.Error("Should refresh terms when no data")
+		}
+
+		// Verify the logic would call refresh functions
+		ratesRefreshCalled := shouldRefreshRates
+		termsRefreshCalled := shouldRefreshTerms
+
+		if !ratesRefreshCalled {
+			t.Error("Rates refresh should be called")
+		}
+		if !termsRefreshCalled {
+			t.Error("Terms refresh should be called")
+		}
+	})
+
+	t.Run("leader initial load with valid data", func(t *testing.T) {
+		// Set up valid data in memory cache
+		validUntil := time.Now().UTC().Add(2 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := memCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Set up valid terms data
+		termsData := &storage.TermsCacheData{
+			ByAgency:    make(map[int]storage.AgencyPaymentTerm),
+			BpddNames:   make(map[int]string),
+			FreqNames:   make(map[int]string),
+			LastRefresh: time.Now().UTC().Add(-30 * time.Minute), // 30 minutes ago
+		}
+		err = memCache.DumpTerms(termsData)
+		if err != nil {
+			t.Fatalf("Failed to dump terms: %v", err)
+		}
+
+		// This should NOT trigger API calls when leader starts
+		shouldRefreshRates := ddm.shouldRefreshRates()
+		shouldRefreshTerms := ddm.shouldRefreshTerms()
+
+		if shouldRefreshRates {
+			t.Error("Should NOT refresh rates when data is valid")
+		}
+		if shouldRefreshTerms {
+			t.Error("Should NOT refresh terms when data is valid")
+		}
+	})
+}
+
+// TestDistributedDataManager_LeaderChangeBehavior tests leader change behavior
+func TestDistributedDataManager_LeaderChangeBehavior(t *testing.T) {
+	// Setup Redis cache
+	redisCache, err := storage.NewRedisCache("tcp://localhost:6379/0")
+	if err != nil {
+		t.Skipf("Skipping test - Redis not available: %v", err)
+	}
+	defer redisCache.CleanupTestData()
+
+	// Setup memory cache
+	memCache := storage.NewMemoryCache()
+
+	// Test options
+	opts := &ServiceOptions{
+		EnableLogging: true,
+	}
+
+	// Create distributed manager
+	ddm := NewDistributedDataManager(redisCache, memCache, opts)
+
+	t.Run("new leader with valid data continues same logic", func(t *testing.T) {
+		// Set up valid data in memory cache
+		validUntil := time.Now().UTC().Add(2 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := memCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Set up valid terms data
+		termsData := &storage.TermsCacheData{
+			ByAgency:    make(map[int]storage.AgencyPaymentTerm),
+			BpddNames:   make(map[int]string),
+			FreqNames:   make(map[int]string),
+			LastRefresh: time.Now().UTC().Add(-30 * time.Minute), // 30 minutes ago
+		}
+		err = memCache.DumpTerms(termsData)
+		if err != nil {
+			t.Fatalf("Failed to dump terms: %v", err)
+		}
+
+		// New leader should use same logic
+		shouldRefreshRates := ddm.shouldRefreshRates()
+		shouldRefreshTerms := ddm.shouldRefreshTerms()
+
+		if shouldRefreshRates {
+			t.Error("New leader should NOT refresh rates when data is valid")
+		}
+		if shouldRefreshTerms {
+			t.Error("New leader should NOT refresh terms when data is valid")
+		}
+	})
+
+	t.Run("new leader with expired data refreshes", func(t *testing.T) {
+		// Set up expired data in memory cache
+		validUntil := time.Now().UTC().Add(-1 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := memCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Set up expired terms data
+		termsData := &storage.TermsCacheData{
+			ByAgency:    make(map[int]storage.AgencyPaymentTerm),
+			BpddNames:   make(map[int]string),
+			FreqNames:   make(map[int]string),
+			LastRefresh: time.Now().UTC().Add(-3 * time.Hour), // 3 hours ago (expired)
+		}
+		err = memCache.DumpTerms(termsData)
+		if err != nil {
+			t.Fatalf("Failed to dump terms: %v", err)
+		}
+
+		// New leader should refresh expired data
+		shouldRefreshRates := ddm.shouldRefreshRates()
+		shouldRefreshTerms := ddm.shouldRefreshTerms()
+
+		if !shouldRefreshRates {
+			t.Error("New leader should refresh rates when data is expired")
+		}
+		if !shouldRefreshTerms {
+			t.Error("New leader should refresh terms when data is expired")
+		}
+	})
+}
+
+// TestDistributedDataManager_DataSyncOnLeaderChange tests data sync when leader changes
+func TestDistributedDataManager_DataSyncOnLeaderChange(t *testing.T) {
+	// Setup Redis cache
+	redisCache, err := storage.NewRedisCache("tcp://localhost:6379/0")
+	if err != nil {
+		t.Skipf("Skipping test - Redis not available: %v", err)
+	}
+	defer redisCache.CleanupTestData()
+
+	// Setup memory cache
+	memCache := storage.NewMemoryCache()
+
+	// Test options
+	opts := &ServiceOptions{
+		EnableLogging: true,
+	}
+
+	// Create distributed manager
+	ddm := NewDistributedDataManager(redisCache, memCache, opts)
+
+	t.Run("follower syncs when leader updates data", func(t *testing.T) {
+		// Simulate leader updating data in Redis
+		validUntil := time.Now().UTC().Add(2 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       5, // Higher revision
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := redisCache.SetRatesBackup(envelope)
+		if err != nil {
+			t.Fatalf("Failed to set rates backup: %v", err)
+		}
+
+		// Set up data version in Redis
+		version := &storage.DataVersion{
+			RatesRevision: 5,
+			LastUpdated:   time.Now().UTC(),
+			LastUpdatedBy: "leader-pod",
+		}
+		err = redisCache.SetDataVersion(version)
+		if err != nil {
+			t.Fatalf("Failed to set data version: %v", err)
+		}
+
+		// Set up local data with lower revision
+		localEnvelope := &storage.RatesEnvelope{
+			Revision:       3, // Lower revision
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err = memCache.DumpRates(localEnvelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Follower should detect sync is needed
+		needsSync := ddm.needsDataSync()
+		if !needsSync {
+			t.Error("Follower should detect sync is needed when leader updates data")
+		}
+
+		// Perform sync
+		ddm.syncFromRedis()
+
+		// Verify local data was updated
+		_, localRevision, hasData := memCache.GetRatesMetadata()
+		if !hasData {
+			t.Error("Local data should exist after sync")
+		}
+		if localRevision != 5 {
+			t.Errorf("Local revision should be updated to match Redis, expected 5, got %d", localRevision)
+		}
+	})
+
+	t.Run("follower skips sync when data is up to date", func(t *testing.T) {
+		// Set up same data in both Redis and local cache
+		validUntil := time.Now().UTC().Add(2 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       5,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := redisCache.SetRatesBackup(envelope)
+		if err != nil {
+			t.Fatalf("Failed to set rates backup: %v", err)
+		}
+
+		// Set up data version in Redis
+		version := &storage.DataVersion{
+			RatesRevision: 5,
+			LastUpdated:   time.Now().UTC(),
+			LastUpdatedBy: "leader-pod",
+		}
+		err = redisCache.SetDataVersion(version)
+		if err != nil {
+			t.Fatalf("Failed to set data version: %v", err)
+		}
+
+		// Set up same data locally
+		err = memCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Follower should NOT detect sync is needed
+		needsSync := ddm.needsDataSync()
+		if needsSync {
+			t.Error("Follower should NOT detect sync when data is up to date")
+		}
+	})
+}
+
+// TestDistributedDataManager_ConsistentRefreshLogic tests consistency between functions
+func TestDistributedDataManager_ConsistentRefreshLogic(t *testing.T) {
+	// Setup Redis cache
+	redisCache, err := storage.NewRedisCache("tcp://localhost:6379/0")
+	if err != nil {
+		t.Skipf("Skipping test - Redis not available: %v", err)
+	}
+	defer redisCache.CleanupTestData()
+
+	// Test options
+	opts := &ServiceOptions{
+		EnableLogging: true,
+	}
+
+	t.Run("shouldRefreshRates and calculateNextRatesRefresh are consistent", func(t *testing.T) {
+		// Create fresh memory cache and distributed manager for this test
+		testMemCache := storage.NewMemoryCache()
+		testDdm := NewDistributedDataManager(redisCache, testMemCache, opts)
+
+		// Test with data expiring in 5 minutes (should refresh due to 11-minute buffer)
+		validUntil := time.Now().UTC().Add(5 * time.Minute)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := testMemCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Verify data was stored
+		_, revision, hasData := testMemCache.GetRatesMetadata()
+		if !hasData {
+			t.Fatalf("Data was not stored in memory cache")
+		}
+		t.Logf("Stored data: revision=%d, hasData=%v", revision, hasData)
+
+		// Both functions should agree that refresh is needed
+		shouldRefresh := testDdm.shouldRefreshRates()
+		nextRefresh := testDdm.calculateNextRatesRefresh()
+		now := time.Now().UTC()
+
+		if !shouldRefresh {
+			t.Error("shouldRefreshRates should return true")
+		}
+		// When data is expiring soon, calculateNextRatesRefresh should return a time in the near future
+		// (within 30 seconds) to avoid infinite loops, but shouldRefreshRates should still return true
+		if nextRefresh.After(now.Add(1 * time.Minute)) {
+			t.Error("calculateNextRatesRefresh should return time within 1 minute when data is expiring soon")
+		}
+	})
+
+	t.Run("shouldRefreshRates and calculateNextRatesRefresh are consistent with valid data", func(t *testing.T) {
+		// Create fresh memory cache and distributed manager for this test
+		testMemCache := storage.NewMemoryCache()
+		testDdm := NewDistributedDataManager(redisCache, testMemCache, opts)
+
+		// Test with data expiring in 2 hours (should NOT refresh)
+		validUntil := time.Now().UTC().Add(2 * time.Hour)
+		envelope := &storage.RatesEnvelope{
+			Revision:       1,
+			ValidUntilDate: validUntil.Format("2006-01-02T15:04:05"),
+			TenorCalcDate:  time.Now().UTC().Format("2006-01-02T15:04:05"),
+			IsSuccessful:   true,
+			CurrencyCollection: storage.CurrencyCollection{
+				Hedged: []storage.HedgedPair{},
+				Spot: []storage.SpotPair{
+					{
+						From: "USD",
+						To:   "EUR",
+						Rate: 0.85,
+					},
+				},
+			},
+		}
+		err := testMemCache.DumpRates(envelope)
+		if err != nil {
+			t.Fatalf("Failed to dump rates: %v", err)
+		}
+
+		// Both functions should agree that refresh is NOT needed
+		shouldRefresh := testDdm.shouldRefreshRates()
+		nextRefresh := testDdm.calculateNextRatesRefresh()
+		now := time.Now().UTC()
+
+		if shouldRefresh {
+			t.Error("shouldRefreshRates should return false")
+		}
+		if !nextRefresh.After(now) {
+			t.Error("calculateNextRatesRefresh should return time in future")
+		}
+	})
 }

@@ -31,6 +31,10 @@ type DistributedDataManager struct {
 	nextRatesRefresh time.Time
 	nextTermsRefresh time.Time
 	refreshMu        sync.RWMutex
+	// Leader-specific context for graceful shutdown
+	leaderCtx    context.Context
+	leaderCancel context.CancelFunc
+	leaderMu     sync.Mutex
 }
 
 // NewDistributedDataManager creates a new distributed data manager
@@ -135,12 +139,56 @@ func (ddm *DistributedDataManager) GetPodID() string {
 	return ddm.podID
 }
 
+// shouldRefreshRates checks if rates need refreshing based on ValidUntil date
+func (ddm *DistributedDataManager) shouldRefreshRates() bool {
+	validUntil, _, hasData := ddm.memCache.GetRatesMetadata()
+	if !hasData {
+		ddm.log("📝 No rates data found, need to refresh")
+		return true // No data, need to fetch
+	}
+	if validUntil.IsZero() {
+		ddm.log("📝 No ValidUntil date for rates, need to refresh")
+		return true // No ValidUntil date, need to fetch
+	}
+
+	// Check if we should refresh now (11 minutes before data expires)
+	refreshThreshold := validUntil.Add(-rateRefreshBuffer)
+	now := time.Now().UTC()
+	needsRefresh := !now.Before(refreshThreshold) // now >= refreshThreshold (after or equal)
+
+	if needsRefresh {
+		ddm.log("📝 Rates data needs refresh (ValidUntil: %v, RefreshThreshold: %v, Now: %v)", validUntil.Format("2006-01-02 15:04:05 UTC"), refreshThreshold.Format("2006-01-02 15:04:05 UTC"), now.Format("2006-01-02 15:04:05 UTC"))
+	} else {
+		ddm.log("📝 Rates data still valid (ValidUntil: %v), skipping API call", validUntil.Format("2006-01-02 15:04:05 UTC"))
+	}
+	return needsRefresh
+}
+
+// shouldRefreshTerms checks if terms need refreshing based on last refresh time
+func (ddm *DistributedDataManager) shouldRefreshTerms() bool {
+	lastRefresh := ddm.memCache.GetTermsLastRefresh()
+	if lastRefresh.IsZero() {
+		ddm.log("📝 No terms data found, need to refresh")
+		return true // No data, need to fetch
+	}
+
+	nextRefresh := lastRefresh.Add(ddm.termsRefreshInterval)
+	now := time.Now().UTC()
+	needsRefresh := now.After(nextRefresh)
+	if needsRefresh {
+		ddm.log("📝 Terms data expired (LastRefresh: %v, NextRefresh: %v), need to refresh", lastRefresh.Format("2006-01-02 15:04:05 UTC"), nextRefresh.Format("2006-01-02 15:04:05 UTC"))
+	} else {
+		ddm.log("📝 Terms data still valid (LastRefresh: %v), skipping API call", lastRefresh.Format("2006-01-02 15:04:05 UTC"))
+	}
+	return needsRefresh
+}
+
 // calculateNextRatesRefresh calculates when to refresh rates based on ValidUntil date
 func (ddm *DistributedDataManager) calculateNextRatesRefresh() time.Time {
 	validUntil, _, hasData := ddm.memCache.GetRatesMetadata()
 	if !hasData {
-		// No data yet, refresh immediately
-		return time.Now().UTC()
+		// No data yet, refresh after a short delay to avoid infinite loops
+		return time.Now().UTC().Add(30 * time.Second)
 	}
 
 	if validUntil.IsZero() {
@@ -148,12 +196,12 @@ func (ddm *DistributedDataManager) calculateNextRatesRefresh() time.Time {
 		return time.Now().UTC().Add(ddm.ratesRefreshInterval)
 	}
 
-	// Refresh 15 seconds before data expires
-	nextRefresh := validUntil.Add(-11 * time.Minute)
+	// Refresh 11 minutes before data expires
+	nextRefresh := validUntil.Add(-rateRefreshBuffer)
 
 	// Ensure we don't schedule a refresh in the past
 	if nextRefresh.Before(time.Now().UTC()) {
-		return time.Now().UTC()
+		return time.Now().UTC().Add(30 * time.Second)
 	}
 
 	return nextRefresh
@@ -163,12 +211,42 @@ func (ddm *DistributedDataManager) calculateNextRatesRefresh() time.Time {
 func (ddm *DistributedDataManager) calculateNextTermsRefresh() time.Time {
 	lastRefresh := ddm.memCache.GetTermsLastRefresh()
 	if lastRefresh.IsZero() {
-		// No terms data yet, refresh immediately
-		return time.Now().UTC()
+		// No terms data yet, refresh after a short delay to avoid infinite loops
+		return time.Now().UTC().Add(30 * time.Second)
 	}
 
 	// Use the configured interval for terms (they don't have ValidUntil)
-	return lastRefresh.Add(ddm.termsRefreshInterval)
+	nextRefresh := lastRefresh.Add(ddm.termsRefreshInterval)
+
+	// Ensure we don't schedule a refresh in the past
+	if nextRefresh.Before(time.Now().UTC()) {
+		return time.Now().UTC().Add(30 * time.Second)
+	}
+
+	return nextRefresh
+}
+
+// refreshDataIfNeeded refreshes data based on what needs refreshing
+func (ddm *DistributedDataManager) refreshDataIfNeeded() {
+	// Check if rates need refreshing
+	if ddm.shouldRefreshRates() {
+		ddm.log("🔄 Time to refresh rates (ValidUntil-based)")
+		if err := ddm.refreshRatesFromAPI(); err != nil {
+			ddm.log("❌ Failed to refresh rates: %v", err)
+		} else {
+			ddm.log("✅ Rates refreshed successfully")
+		}
+	}
+
+	// Check if terms need refreshing
+	if ddm.shouldRefreshTerms() {
+		ddm.log("🔄 Time to refresh terms (static interval-based)")
+		if err := ddm.refreshTermsFromAPI(); err != nil {
+			ddm.log("❌ Failed to refresh payment terms: %v", err)
+		} else {
+			ddm.log("✅ Terms refreshed successfully")
+		}
+	}
 }
 
 // updateNextRefreshTimes updates the next refresh times based on current data
@@ -179,7 +257,7 @@ func (ddm *DistributedDataManager) updateNextRefreshTimes() {
 	ddm.nextRatesRefresh = ddm.calculateNextRatesRefresh()
 	ddm.nextTermsRefresh = ddm.calculateNextTermsRefresh()
 
-	ddm.log("📅 Next rates refresh: %v (ValidUntil - 15s)", ddm.nextRatesRefresh.Format("2006-01-02 15:04:05 UTC"))
+	ddm.log("📅 Next rates refresh: %v (ValidUntil - 11m)", ddm.nextRatesRefresh.Format("2006-01-02 15:04:05 UTC"))
 	ddm.log("📅 Next terms refresh: %v (static %v interval)", ddm.nextTermsRefresh.Format("2006-01-02 15:04:05 UTC"), ddm.termsRefreshInterval)
 }
 
@@ -240,12 +318,16 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 		if err != nil {
 			ddm.log("⚠️ Failed to renew leadership: %v", err)
 			ddm.isLeader = false
+			// Cancel leader context to stop data refresh loop
+			ddm.cancelLeaderContext()
 			return
 		}
 
 		if !renewed {
 			ddm.log("👑 Leadership lost, becoming follower")
 			ddm.isLeader = false
+			// Cancel leader context to stop data refresh loop
+			ddm.cancelLeaderContext()
 		}
 	} else {
 		// Try to acquire leadership
@@ -259,6 +341,9 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 			ddm.log("👑 Became leader! Starting data refresh loop")
 			ddm.isLeader = true
 
+			// Create new leader context
+			ddm.createLeaderContext()
+
 			// Start data refresh loop for leader
 			ddm.wg.Add(1)
 			go ddm.leaderDataRefreshLoop()
@@ -270,11 +355,17 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 func (ddm *DistributedDataManager) leaderDataRefreshLoop() {
 	defer ddm.wg.Done()
 
-	// Initial refresh of both
-	ddm.refreshDataFromAPIs()
+	// Get the leader context for this specific leadership period
+	leaderCtx := ddm.getLeaderContext()
+
+	// Smart initial refresh - only if data is stale
+	ddm.log("👑 New leader checking if data refresh is needed...")
 
 	// Update refresh times after initial load
 	ddm.updateNextRefreshTimes()
+
+	// Initial refresh if needed
+	ddm.refreshDataIfNeeded()
 
 	for {
 		// Check if we're still the leader
@@ -283,77 +374,41 @@ func (ddm *DistributedDataManager) leaderDataRefreshLoop() {
 			return
 		}
 
-		// Update refresh times and get the next refresh time
-		ddm.updateNextRefreshTimes()
+		// Get the next refresh time
 		nextRefresh := ddm.getNextRefreshTime()
 		now := time.Now().UTC()
 
-		// Wait until next refresh time if it's in the future
-		if nextRefresh.After(now) {
-			waitDuration := nextRefresh.Sub(now)
-			ddm.log("⏰ Next refresh in %v (at %v)", waitDuration, nextRefresh.Format("2006-01-02 15:04:05 UTC"))
+		// Wait until next refresh time
+		waitDuration := nextRefresh.Sub(now)
+		ddm.log("⏰ Next refresh in %v (at %v)", waitDuration, nextRefresh.Format("2006-01-02 15:04:05 UTC"))
 
-			// Wait until next refresh time or context cancellation
-			timer := time.NewTimer(waitDuration)
-			select {
-			case <-ddm.ctx.Done():
-				timer.Stop()
+		// Wait until next refresh time or context cancellation
+		timer := time.NewTimer(waitDuration)
+		select {
+		case <-leaderCtx.Done():
+			// Leadership changed or service is shutting down
+			timer.Stop()
+			ddm.log("👑 Leader context cancelled, stopping data refresh")
+			return
+		case <-ddm.ctx.Done():
+			// Service is shutting down
+			timer.Stop()
+			return
+		case <-timer.C:
+			// Timer fired - time to refresh
+			timer.Stop()
+			ddm.log("🔄 Timer fired - time to refresh")
+
+			// Double-check we're still the leader before refreshing
+			if !ddm.IsLeader() {
+				ddm.log("👑 No longer leader during refresh, skipping")
 				return
-			case <-timer.C:
-				// Time to refresh - recalculate times and refresh what's needed
-				ddm.updateNextRefreshTimes()
 			}
-		}
 
-		// Get current refresh times after waiting/updating
-		ddm.refreshMu.RLock()
-		ratesTime := ddm.nextRatesRefresh
-		termsTime := ddm.nextTermsRefresh
-		ddm.refreshMu.RUnlock()
-
-		now = time.Now().UTC()
-
-		// Refresh rates if it's time (ValidUntil-based)
-		if !ratesTime.After(now) {
-			ddm.log("🔄 Time to refresh rates (ValidUntil-based)")
-			if err := ddm.refreshRatesFromAPI(); err != nil {
-				ddm.log("❌ Failed to refresh rates: %v", err)
-			} else {
-				ddm.log("✅ Rates refreshed successfully")
-			}
-		}
-
-		// Refresh terms if it's time (static interval-based)
-		if !termsTime.After(now) {
-			ddm.log("🔄 Time to refresh terms (static interval-based)")
-			if err := ddm.refreshTermsFromAPI(); err != nil {
-				ddm.log("❌ Failed to refresh payment terms: %v", err)
-			} else {
-				ddm.log("✅ Payment terms refreshed successfully")
-			}
+			ddm.refreshDataIfNeeded()
+			ddm.updateNextRefreshTimes()
 		}
 	}
-}
-
-// refreshDataFromAPIs fetches fresh data from external APIs (leader only)
-func (ddm *DistributedDataManager) refreshDataFromAPIs() {
-	ddm.log("🔄 Leader refreshing data from external APIs...")
-
-	// Refresh rates
-	if err := ddm.refreshRatesFromAPI(); err != nil {
-		ddm.log("❌ Failed to refresh rates: %v", err)
-	} else {
-		ddm.log("✅ Rates refreshed successfully")
-	}
-
-	// Refresh payment terms
-	if err := ddm.refreshTermsFromAPI(); err != nil {
-		ddm.log("❌ Failed to refresh payment terms: %v", err)
-	} else {
-		ddm.log("✅ Payment terms refreshed successfully")
-	}
-
-	// Data versions are updated in individual refresh functions
 }
 
 // refreshRatesFromAPI fetches rates from external API
@@ -569,8 +624,48 @@ func (ddm *DistributedDataManager) syncTermsFromRedis() {
 	ddm.log("✅ Terms synced from Redis to memory cache (%d agencies)", len(termsData.ByAgency))
 }
 
+// createLeaderContext creates a new context for the leader's data refresh loop
+func (ddm *DistributedDataManager) createLeaderContext() {
+	ddm.leaderMu.Lock()
+	defer ddm.leaderMu.Unlock()
+
+	// Cancel any existing leader context
+	if ddm.leaderCancel != nil {
+		ddm.leaderCancel()
+	}
+
+	// Create new leader context
+	ddm.leaderCtx, ddm.leaderCancel = context.WithCancel(ddm.ctx)
+}
+
+// cancelLeaderContext cancels the leader's data refresh loop context
+func (ddm *DistributedDataManager) cancelLeaderContext() {
+	ddm.leaderMu.Lock()
+	defer ddm.leaderMu.Unlock()
+
+	if ddm.leaderCancel != nil {
+		ddm.leaderCancel()
+		ddm.leaderCancel = nil
+		ddm.leaderCtx = nil
+	}
+}
+
+// getLeaderContext returns the current leader context
+func (ddm *DistributedDataManager) getLeaderContext() context.Context {
+	ddm.leaderMu.Lock()
+	defer ddm.leaderMu.Unlock()
+
+	if ddm.leaderCtx != nil {
+		return ddm.leaderCtx
+	}
+	return ddm.ctx // Fallback to main context
+}
+
 // releaseLeadership releases the leadership
 func (ddm *DistributedDataManager) releaseLeadership() {
+	// Cancel leader context before releasing leadership
+	ddm.cancelLeaderContext()
+
 	if err := ddm.redisCache.ReleaseLeaderLock(ddm.podID); err != nil {
 		ddm.log("⚠️ Failed to release leadership: %v", err)
 	} else {
