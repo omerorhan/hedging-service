@@ -46,28 +46,35 @@ type HedgingService struct {
 
 // ServiceOptions provides configuration for the hedging service
 type ServiceOptions struct {
-	RedisAddr             string        `json:"redisAddr"`
-	RatesRefreshInterval  time.Duration `json:"ratesRefreshInterval"`
-	TermsRefreshInterval  time.Duration `json:"termsRefreshInterval"`
-	SyncInterval          time.Duration `json:"syncInterval"`
-	InitialLoadTimeout    time.Duration `json:"initialLoadTimeout"`
-	EnableLogging         bool          `json:"enableLogging"`
-	MaxRetries            int           `json:"maxRetries"`
-	RetryDelay            time.Duration `json:"retryDelay"`
-	RatesBaseUrl          string        `json:"ratesBaseUrl"`
-	RatesBasicAuth        string        `json:"ratesBasicAuth"`
-	PaymentTermsBaseUrl   string        `json:"paymentTermsBaseUrl"`
-	PaymentTermsBasicAuth string        `json:"paymentTermsBasicAuth"`
-	HTTPTimeout           time.Duration `json:"httpTimeout"`
+	RedisAddr              string        `json:"redisAddr"`
+	RatesRefreshInterval   time.Duration `json:"ratesRefreshInterval"`
+	TermsRefreshInterval   time.Duration `json:"termsRefreshInterval"`
+	NonLeaderSyncInterval  time.Duration `json:"syncInterval"`
+	LeaderElectionInterval time.Duration `json:"leaderElectionInterval"`
+	LockLeaderTTL          time.Duration `json:"lockLeaderTTL"`
+	RateRefreshBuffer      time.Duration `json:"rateRefreshBuffer"`
+	EnableLogging          bool          `json:"enableLogging"`
+	MaxRetries             int           `json:"maxRetries"`
+	RetryDelay             time.Duration `json:"retryDelay"`
+	RatesBaseUrl           string        `json:"ratesBaseUrl"`
+	RatesBasicAuth         string        `json:"ratesBasicAuth"`
+	PaymentTermsBaseUrl    string        `json:"paymentTermsBaseUrl"`
+	PaymentTermsBasicAuth  string        `json:"paymentTermsBasicAuth"`
+	HTTPTimeout            time.Duration `json:"httpTimeout"`
 }
 
 // DefaultServiceOptions returns sensible default options
 func DefaultServiceOptions() *ServiceOptions {
 	return &ServiceOptions{
-		RedisAddr:          "tcp://localhost:6379",
-		InitialLoadTimeout: 30 * time.Second,
-		EnableLogging:      true,
-		HTTPTimeout:        30 * time.Second, // Default 30 second timeout
+		RedisAddr:              "tcp://localhost:6379",
+		RatesRefreshInterval:   5 * time.Minute,   // Default 5 minutes for rates
+		TermsRefreshInterval:   2 * time.Hour,     // Default 2 hours for terms
+		NonLeaderSyncInterval:  5 * time.Second,   // Default 5 seconds for sync
+		LeaderElectionInterval: 20 * time.Second,  // Default 20 seconds for leader election
+		LockLeaderTTL:          2 * time.Minute,   // Default 2 minutes for lock TTL
+		RateRefreshBuffer:      -11 * time.Minute, // Default 11 minutes buffer before ValidUntil
+		EnableLogging:          true,
+		HTTPTimeout:            30 * time.Second, // Default 30 second timeout
 	}
 }
 
@@ -143,9 +150,27 @@ func WithTermsRefreshInterval(interval time.Duration) ServiceOption {
 	}
 }
 
-func WithSyncInterval(interval time.Duration) ServiceOption {
+func WithNonLeaderSyncInterval(interval time.Duration) ServiceOption {
 	return func(opts *ServiceOptions) {
-		opts.SyncInterval = interval
+		opts.NonLeaderSyncInterval = interval
+	}
+}
+
+func WithLeaderElectionInterval(interval time.Duration) ServiceOption {
+	return func(opts *ServiceOptions) {
+		opts.LeaderElectionInterval = interval
+	}
+}
+
+func WithLockLeaderTTL(ttl time.Duration) ServiceOption {
+	return func(opts *ServiceOptions) {
+		opts.LockLeaderTTL = ttl
+	}
+}
+
+func WithRateRefreshBuffer(buffer time.Duration) ServiceOption {
+	return func(opts *ServiceOptions) {
+		opts.RateRefreshBuffer = buffer
 	}
 }
 

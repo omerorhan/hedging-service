@@ -12,21 +12,17 @@ import (
 
 // DistributedDataManager handles distributed data updates across multiple pods
 type DistributedDataManager struct {
-	redisCache           storage.Cache
-	memCache             *storage.MemoryCache
-	podID                string
-	isLeader             bool
-	mu                   sync.RWMutex
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	wg                   sync.WaitGroup
-	ratesRefreshInterval time.Duration
-	termsRefreshInterval time.Duration
-	syncInterval         time.Duration
-	lockTTL              time.Duration
-	opts                 *ServiceOptions
-	started              bool
-	startMu              sync.Mutex
+	redisCache storage.Cache
+	memCache   *storage.MemoryCache
+	podID      string
+	isLeader   bool
+	mu         sync.RWMutex
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	opts       *ServiceOptions
+	started    bool
+	startMu    sync.Mutex
 	// Dynamic refresh tracking
 	nextRatesRefresh time.Time
 	nextTermsRefresh time.Time
@@ -45,33 +41,13 @@ func NewDistributedDataManager(redisCache storage.Cache, memCache *storage.Memor
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Set default intervals if not specified
-	ratesInterval := opts.RatesRefreshInterval
-	if ratesInterval == 0 {
-		ratesInterval = 5 * time.Minute // Default 5 minutes for rates
-	}
-
-	termsInterval := opts.TermsRefreshInterval
-	if termsInterval == 0 {
-		termsInterval = 2 * time.Hour // Default 2 hours for terms (static interval)
-	}
-
-	syncInterval := 5 * time.Second // Default 5 seconds for data sync
-	if opts.SyncInterval != 0 {
-		syncInterval = opts.SyncInterval
-	}
-
 	return &DistributedDataManager{
-		redisCache:           redisCache,
-		memCache:             memCache,
-		podID:                podID,
-		ratesRefreshInterval: ratesInterval,
-		termsRefreshInterval: termsInterval,
-		syncInterval:         syncInterval,
-		lockTTL:              2 * time.Minute, // Lock expires in 2 minutes
-		opts:                 opts,
-		ctx:                  ctx,
-		cancel:               cancel,
+		redisCache: redisCache,
+		memCache:   memCache,
+		podID:      podID,
+		opts:       opts,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
@@ -156,8 +132,8 @@ func (ddm *DistributedDataManager) shouldRefreshRates() bool {
 		return true // No ValidUntil date, need to fetch
 	}
 
-	// Check if we should refresh now (11 minutes before data expires)
-	refreshThreshold := validUntil.Add(-rateRefreshBuffer)
+	// Check if we should refresh now (configurable buffer before data expires)
+	refreshThreshold := validUntil.Add(ddm.opts.RateRefreshBuffer)
 	now := time.Now().UTC()
 	needsRefresh := !now.Before(refreshThreshold) // now >= refreshThreshold (after or equal)
 
@@ -182,7 +158,7 @@ func (ddm *DistributedDataManager) shouldRefreshTerms() bool {
 		return true // No data, need to fetch
 	}
 
-	nextRefresh := lastRefresh.Add(ddm.termsRefreshInterval)
+	nextRefresh := lastRefresh.Add(ddm.opts.TermsRefreshInterval)
 	now := time.Now().UTC()
 	needsRefresh := now.After(nextRefresh)
 	if needsRefresh {
@@ -208,11 +184,11 @@ func (ddm *DistributedDataManager) calculateNextRatesRefresh() time.Time {
 
 	if validUntil.IsZero() {
 		// No ValidUntil date, use fallback interval
-		return time.Now().UTC().Add(ddm.ratesRefreshInterval)
+		return time.Now().UTC().Add(ddm.opts.RatesRefreshInterval)
 	}
 
-	// Refresh 11 minutes before data expires
-	nextRefresh := validUntil.Add(-rateRefreshBuffer)
+	// Refresh configurable buffer before data expires
+	nextRefresh := validUntil.Add(ddm.opts.RateRefreshBuffer)
 
 	// Ensure we don't schedule a refresh in the past
 	if nextRefresh.Before(time.Now().UTC()) {
@@ -236,7 +212,7 @@ func (ddm *DistributedDataManager) calculateNextTermsRefresh() time.Time {
 	}
 
 	// Use the configured interval for terms (they don't have ValidUntil)
-	nextRefresh := lastRefresh.Add(ddm.termsRefreshInterval)
+	nextRefresh := lastRefresh.Add(ddm.opts.TermsRefreshInterval)
 
 	// Ensure we don't schedule a refresh in the past
 	if nextRefresh.Before(time.Now().UTC()) {
@@ -277,8 +253,8 @@ func (ddm *DistributedDataManager) updateNextRefreshTimes() {
 	ddm.nextRatesRefresh = ddm.calculateNextRatesRefresh()
 	ddm.nextTermsRefresh = ddm.calculateNextTermsRefresh()
 
-	ddm.log("📅 Next rates refresh: %v (ValidUntil - 11m)", ddm.nextRatesRefresh.Format("2006-01-02 15:04:05 UTC"))
-	ddm.log("📅 Next terms refresh: %v (static %v interval)", ddm.nextTermsRefresh.Format("2006-01-02 15:04:05 UTC"), ddm.termsRefreshInterval)
+	ddm.log("📅 Next rates refresh: %v (ValidUntil - %v)", ddm.nextRatesRefresh.Format("2006-01-02 15:04:05 UTC"), ddm.opts.RateRefreshBuffer)
+	ddm.log("📅 Next terms refresh: %v (static %v interval)", ddm.nextTermsRefresh.Format("2006-01-02 15:04:05 UTC"), ddm.opts.TermsRefreshInterval)
 }
 
 // getNextRefreshTime returns the earliest of the next refresh times
@@ -293,13 +269,17 @@ func (ddm *DistributedDataManager) getNextRefreshTime() time.Time {
 func (ddm *DistributedDataManager) mainLoop() {
 	defer ddm.wg.Done()
 
-	// Leader election ticker - check every 20 seconds
-	leaderTicker := time.NewTicker(20 * time.Second)
+	// Leader election ticker - configurable interval
+	leaderInterval := ddm.opts.LeaderElectionInterval
+	if leaderInterval == 0 {
+		leaderInterval = 20 * time.Second // Fallback default
+	}
+	leaderTicker := time.NewTicker(leaderInterval)
 	defer leaderTicker.Stop()
 
 	// Data sync ticker - check periodically for non-leader pods
-	syncTicker := time.NewTicker(ddm.syncInterval)
-	defer syncTicker.Stop()
+	nonLeaderSyncTicker := time.NewTicker(ddm.opts.NonLeaderSyncInterval)
+	defer nonLeaderSyncTicker.Stop()
 
 	// Initial sync from Redis
 	ddm.syncFromRedis()
@@ -313,14 +293,11 @@ func (ddm *DistributedDataManager) mainLoop() {
 			return
 		case <-leaderTicker.C:
 			ddm.performLeaderElection()
-		case <-syncTicker.C:
+		case <-nonLeaderSyncTicker.C:
 			// Only sync if we're not the leader (leaders update data themselves)
 			if !ddm.IsLeader() {
-				ddm.log("🔄 Non-leader pod checking for data updates...")
 				if ddm.needsDataSync() {
 					ddm.syncFromRedis()
-				} else {
-					ddm.log("📝 Data is up to date, skipping sync")
 				}
 			}
 		}
@@ -334,7 +311,7 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 
 	if ddm.isLeader {
 		// Try to renew leadership
-		renewed, err := ddm.redisCache.RenewLeadership(ddm.podID, ddm.lockTTL)
+		renewed, err := ddm.redisCache.RenewLeadership(ddm.podID, ddm.opts.LockLeaderTTL)
 		if err != nil {
 			ddm.log("⚠️ Failed to renew leadership: %v", err)
 			ddm.isLeader = false
@@ -351,7 +328,7 @@ func (ddm *DistributedDataManager) performLeaderElection() {
 		}
 	} else {
 		// Try to acquire leadership
-		acquired, err := ddm.redisCache.AcquireLeaderLock(ddm.podID, ddm.lockTTL)
+		acquired, err := ddm.redisCache.AcquireLeaderLock(ddm.podID, ddm.opts.LockLeaderTTL)
 		if err != nil {
 			ddm.log("⚠️ Failed to acquire leadership: %v", err)
 			return
@@ -573,7 +550,7 @@ func (ddm *DistributedDataManager) getDataVersionInfo() (bool, *storage.DataVers
 	if needsRatesSync {
 		ddm.log("🔄 Data sync needed: Redis rates revision %d > local %d", currentVersion.RatesRevision, localRevision)
 	} else {
-		ddm.log("📝 Rates are up to date (Redis: %d, Local: %d)", currentVersion.RatesRevision, localRevision)
+		// ddm.log("📝 Rates are up to date (Redis: %d, Local: %d)", currentVersion.RatesRevision, localRevision)
 	}
 
 	return needsRatesSync, currentVersion, localRevision, nil
@@ -590,7 +567,7 @@ func (ddm *DistributedDataManager) needsDataSync() bool {
 
 // syncFromRedis syncs data from Redis to local memory cache
 func (ddm *DistributedDataManager) syncFromRedis() {
-	ddm.log("📥 Syncing data from Redis...")
+	// ddm.log("📥 Syncing data from Redis...")
 
 	needsRatesSync, currentVersion, localRevision, err := ddm.getDataVersionInfo()
 	if err != nil {

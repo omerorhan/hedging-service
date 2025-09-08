@@ -267,7 +267,7 @@ func TestDistributedDataManager_DataSync(t *testing.T) {
 
 	memCache := storage.NewMemoryCache()
 	opts := DefaultServiceOptions()
-	opts.SyncInterval = 1 * time.Second // Fast sync for testing
+	opts.NonLeaderSyncInterval = 1 * time.Second // Fast sync for testing
 
 	// Create distributed manager
 	manager := NewDistributedDataManager(redisCache, memCache, opts)
@@ -336,7 +336,7 @@ func TestDistributedDataManager_RealDataSync(t *testing.T) {
 	memCache1 := storage.NewMemoryCache()
 	memCache2 := storage.NewMemoryCache()
 	opts := DefaultServiceOptions()
-	opts.SyncInterval = 1 * time.Second // Fast sync for testing
+	opts.NonLeaderSyncInterval = 1 * time.Second // Fast sync for testing
 
 	manager1 := NewDistributedDataManager(redisCache, memCache1, opts)
 	manager2 := NewDistributedDataManager(redisCache, memCache2, opts)
@@ -543,7 +543,7 @@ func TestDistributedDataManager_DynamicRefresh(t *testing.T) {
 
 	memCache := storage.NewMemoryCache()
 	opts := DefaultServiceOptions()
-	opts.SyncInterval = 1 * time.Second
+	opts.NonLeaderSyncInterval = 1 * time.Second
 
 	manager := NewDistributedDataManager(redisCache, memCache, opts)
 

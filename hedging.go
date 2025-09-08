@@ -50,12 +50,17 @@ type ServiceOption = service.ServiceOption
 
 // Re-export service options for clean API
 var (
-	WithRateBaseUrl          = service.WithRateBaseUrl
-	WithPaymentTermsBaseUrl  = service.WithPaymentTermsBaseUrl
-	WithRedisConfig          = service.WithRedisConfig
-	WithRatesRefreshInterval = service.WithRatesRefreshInterval
-	WithTermsRefreshInterval = service.WithTermsRefreshInterval
-	WithLogging              = service.WithLogging
+	WithRateBaseUrl            = service.WithRateBaseUrl
+	WithPaymentTermsBaseUrl    = service.WithPaymentTermsBaseUrl
+	WithRedisConfig            = service.WithRedisConfig
+	WithRatesRefreshInterval   = service.WithRatesRefreshInterval
+	WithTermsRefreshInterval   = service.WithTermsRefreshInterval
+	WithNonLeaderSyncInterval  = service.WithNonLeaderSyncInterval
+	WithLeaderElectionInterval = service.WithLeaderElectionInterval
+	WithLockLeaderTTL          = service.WithLockLeaderTTL
+	WithRateRefreshBuffer      = service.WithRateRefreshBuffer
+	WithHTTPTimeout            = service.WithHTTPTimeout
+	WithLogging                = service.WithLogging
 )
 
 // GiveMeRateReq is the clean API request type (alias to internal type)

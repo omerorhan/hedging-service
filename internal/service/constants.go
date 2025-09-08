@@ -1,8 +1,6 @@
 package service
 
 import (
-	"time"
-
 	"github.com/omerorhan/hedging-service/internal/storage"
 )
 
@@ -21,7 +19,8 @@ const Daily = "Daily"
 const SpecificDaysOfWeek = "SpecificDaysOfWeek"
 const Spot = "Spot"
 const Hedged = "Hedged"
-const rateRefreshBuffer = 11 * time.Minute
+
+// rateRefreshBuffer is now configurable via ServiceOptions.RateRefreshBuffer
 
 // Data structures from your source code for API responses
 // Use types from storage package for consistency
